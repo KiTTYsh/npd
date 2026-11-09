@@ -106,23 +106,27 @@ Goal: hotkey and Plasma widget work against Navidrome.
   - [x] Full sync (paginated `search3` with empty query) into a staging
         copy, then atomic swap. Never blocks queries or playback.
         (107k songs: ~13 s.)
-  - [ ] Triggered by `update` / `rescan` (and on first start). Report
+  - [x] Triggered by `update` / `rescan` (and on first start). Report
         `updating_db` in `status`; emit `update` + `database` idle events.
-        (Background job and events done; protocol side pending.)
   - [x] Schema: songs, MPD tags, directories, path ↔ ID, MBIDs, ReplayGain.
-  - [ ] Shrink the tag table (integer tag IDs, index-organised table).
-  - [ ] Artist sort names and MusicBrainz IDs via `getArtists` (Navidrome
+  - [x] Compact tag storage: per-song encoded blob for output, index-only
+        `(tag, value, song)` table for lookups (~150 MB for 107k songs).
+  - [x] Artist sort names and MusicBrainz IDs via `getArtists` (Navidrome
         omits them from song entries).
   - [ ] Queue entries and stored playlists survive a swap (keyed by Subsonic
         ID; tracks removed from the server become unplayable, not dropped
         silently).
 - [ ] MPD protocol server
-  - [ ] Listener on TCP and unix socket; greeting; `password` (optional).
-  - [ ] Parser: quoting, command lists (`command_list_begin`/`_ok_begin`),
-        `ACK` error codes.
-  - [ ] `idle` / `noidle` with correct subsystem events.
-  - [ ] Status: `status`, `currentsong`, `stats`, `ping`, `close`.
-  - [ ] Library: `lsinfo`, `list`, `find`, `search`, `count`, `listall`.
+  - [x] Listener on TCP and unix socket; greeting; `password` (accepted,
+        not enforced).
+  - [x] Parser: quoting, command lists (`command_list_begin`/`_ok_begin`),
+        `ACK` error codes, filter expressions and legacy `TAG VALUE` pairs,
+        `sort` / `window` / `group`.
+  - [x] `idle` / `noidle` with correct subsystem events.
+  - [ ] Status: `status`, `currentsong` (stubs until the player exists),
+        [x] `stats`, `ping`, `close`, `tagtypes`, `commands`, `decoders`.
+  - [x] Library: `lsinfo`, `list`, `find`, `search`, `count`, `searchcount`,
+        `listall`, `listallinfo`. Unicode case folding for `search`.
   - [ ] Queue: `add`, `addid`, `delete`, `deleteid`, `clear`, `move`,
         `playlistinfo`, `playlistid`, `shuffle`.
   - [ ] Playback: `play`, `playid`, `pause`, `stop`, `next`, `previous`,

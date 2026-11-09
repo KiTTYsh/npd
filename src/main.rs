@@ -1,6 +1,7 @@
 mod config;
 mod events;
 mod library;
+mod mpd;
 mod subsonic;
 
 use std::io::IsTerminal;
@@ -28,7 +29,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the daemon (default).
-    Run,
+    Run {
+        /// Listen on these addresses instead of `mpd.bind` from the config.
+        #[arg(long)]
+        bind: Vec<String>,
+    },
     /// Check the server connection and credentials.
     Ping,
     /// Run a full library sync in the foreground.
@@ -71,7 +76,7 @@ async fn main() -> Result<()> {
         config.server.credentials()?,
     )?);
 
-    match cli.command.unwrap_or(Command::Run) {
+    match cli.command.unwrap_or(Command::Run { bind: Vec::new() }) {
         Command::Ping => ping(&client).await,
         Command::Sync => {
             let library = Library::open(&config.state_dir()?, client, EventBus::new())?;
@@ -82,7 +87,13 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Run => run(config, client).await,
+        Command::Run { bind } => {
+            let mut config = config;
+            if !bind.is_empty() {
+                config.mpd.bind = bind;
+            }
+            run(config, client).await
+        }
         Command::Token => unreachable!(),
     }
 }
@@ -117,6 +128,13 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         info!("no library yet; starting initial sync");
         library.start_update();
     }
+
+    let ctx = Arc::new(mpd::Ctx {
+        library,
+        events,
+        started: std::time::Instant::now(),
+    });
+    mpd::serve(&config.mpd, ctx).await?;
 
     tokio::signal::ctrl_c().await?;
     info!("shutting down");

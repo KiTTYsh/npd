@@ -148,6 +148,12 @@ impl Client {
         Ok(body.search_result3.song)
     }
 
+    /// All (album) artists, with sort names and MusicBrainz IDs.
+    pub async fn artists(&self) -> Result<Vec<ArtistRef>> {
+        let body: ArtistsBody = self.get("getArtists", &[]).await?;
+        Ok(body.artists.index.into_iter().flat_map(|i| i.artist).collect())
+    }
+
     /// One page of all albums, alphabetically.
     pub async fn albums_page(&self, offset: usize, count: usize) -> Result<Vec<Album>> {
         let body: AlbumList2Body = self

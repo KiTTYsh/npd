@@ -52,6 +52,36 @@ pub fn canonical(name: &str) -> Option<&'static str> {
     ALL.iter().copied().find(|t| t.eq_ignore_ascii_case(name))
 }
 
+/// The database ID of a canonical tag name (its index in `ALL`).
+pub fn id(tag: &str) -> u8 {
+    ALL.iter().position(|t| *t == tag).expect("not a canonical tag") as u8
+}
+
+/// Packs tags as `[id] value \0` repeated. Values never contain NUL; the
+/// sync strips any.
+pub fn encode(tags: &[(&'static str, String)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tags.iter().map(|(_, v)| v.len() + 2).sum());
+    for (tag, value) in tags {
+        out.push(id(tag));
+        out.extend(value.bytes().filter(|&b| b != 0));
+        out.push(0);
+    }
+    out
+}
+
+/// Inverse of `encode`. Unknown IDs (from a newer schema) are skipped.
+pub fn decode(mut data: &[u8]) -> Vec<(&'static str, &str)> {
+    let mut tags = Vec::new();
+    while let [id, rest @ ..] = data {
+        let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+        if let (Some(tag), Ok(value)) = (ALL.get(*id as usize), std::str::from_utf8(&rest[..end])) {
+            tags.push((*tag, value));
+        }
+        data = rest.get(end + 1..).unwrap_or_default();
+    }
+    tags
+}
+
 fn nonempty(s: &Option<String>) -> Option<&str> {
     s.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
@@ -296,6 +326,14 @@ mod tests {
         assert_eq!(common(&[]), "");
         assert_eq!(strip_dir("music/A/X", "music"), "A/X");
         assert_eq!(strip_dir("music", "music"), "");
+    }
+
+    #[test]
+    fn encoding_round_trip() {
+        let tags = vec![(ARTIST, "A".to_owned()), (GENRE, "".to_owned()), (TITLE, "x\0y".to_owned())];
+        assert_eq!(decode(&encode(&tags)), [(ARTIST, "A"), (GENRE, ""), (TITLE, "xy")]);
+        assert_eq!(decode(&[]), []);
+        assert_eq!(decode(&[255, b'z', 0, 0, b'q']), [(ARTIST, "q")]);
     }
 
     #[test]

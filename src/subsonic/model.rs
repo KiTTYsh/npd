@@ -162,6 +162,23 @@ pub(super) struct SearchResult3 {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ArtistsBody {
+    pub artists: ArtistsId3,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct ArtistsId3 {
+    pub index: Vec<ArtistIndex>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct ArtistIndex {
+    pub artist: Vec<ArtistRef>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AlbumList2Body {
     pub album_list2: AlbumList2,

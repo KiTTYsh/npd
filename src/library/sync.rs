@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use super::tags;
 use crate::subsonic::Client;
-use crate::subsonic::model::{Album, Song};
+use crate::subsonic::model::{Album, ArtistRef, Song};
 
 const PAGE_SIZE: usize = 500;
 
@@ -43,17 +43,20 @@ CREATE TABLE songs (
     rg_track_gain REAL,
     rg_track_peak REAL,
     rg_album_gain REAL,
-    rg_album_peak REAL
+    rg_album_peak REAL,
+    -- All tags, encoded by `tags::encode`, for printing the song.
+    tags BLOB NOT NULL
 );
 CREATE INDEX songs_dir ON songs(dir);
 
+-- Lookup side of `songs.tags`, for `find` and `list`. `tag` indexes
+-- `tags::ALL`.
 CREATE TABLE tags (
+    tag INTEGER NOT NULL,
+    value TEXT NOT NULL,
     song INTEGER NOT NULL REFERENCES songs(rowid),
-    tag TEXT NOT NULL,
-    value TEXT NOT NULL
-);
-CREATE INDEX tags_tag_value ON tags(tag, value);
-CREATE INDEX tags_song ON tags(song);
+    PRIMARY KEY (tag, value, song)
+) WITHOUT ROWID;
 ";
 
 #[derive(Debug)]
@@ -85,13 +88,20 @@ pub async fn full_sync(client: &Client, path: &Path) -> Result<SyncReport> {
         }
     }
     let album_count = albums.len();
-    info!("fetched {album_count} albums");
+    let artists: HashMap<String, ArtistRef> = client
+        .artists()
+        .await
+        .context("fetching artists")?
+        .into_iter()
+        .filter_map(|a| Some((a.id.clone()?, a)))
+        .collect();
+    info!("fetched {album_count} albums, {} artists", artists.len());
 
     // Fetching and writing overlap: the writer runs on a blocking thread and
     // takes pages as they arrive.
     let (tx, rx) = mpsc::channel::<Vec<Song>>(4);
     let path_owned = path.to_owned();
-    let writer = tokio::task::spawn_blocking(move || write_db(&path_owned, albums, rx));
+    let writer = tokio::task::spawn_blocking(move || write_db(&path_owned, albums, artists, rx));
 
     let mut fetched = 0;
     let fetch_result: Result<()> = async {
@@ -139,6 +149,7 @@ pub async fn full_sync(client: &Client, path: &Path) -> Result<SyncReport> {
 fn write_db(
     path: &Path,
     albums: HashMap<String, Album>,
+    artists: HashMap<String, ArtistRef>,
     mut rx: mpsc::Receiver<Vec<Song>>,
 ) -> Result<SyncReport> {
     match std::fs::remove_file(path) {
@@ -158,14 +169,16 @@ fn write_db(
         let mut insert_song = tx.prepare(
             "INSERT INTO songs (id, uri, dir, album_id, cover_art, duration, bitrate,
                 sample_rate, bit_depth, channels, suffix, content_type, size, added,
-                starred, rating, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
+                starred, rating, rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak,
+                tags)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                ?16, ?17, ?18, ?19, ?20)",
+                ?16, ?17, ?18, ?19, ?20, ?21)",
         )?;
-        let mut insert_tag = tx.prepare("INSERT INTO tags (song, tag, value) VALUES (?1, ?2, ?3)")?;
+        let mut insert_tag =
+            tx.prepare("INSERT OR IGNORE INTO tags (tag, value, song) VALUES (?1, ?2, ?3)")?;
 
         while let Some(page) = rx.blocking_recv() {
-            for song in page {
+            for mut song in page {
                 if !seen_ids.insert(song.id.clone()) {
                     continue; // pages overlapped
                 }
@@ -176,6 +189,15 @@ fn write_db(
                     uris.insert(uri.clone());
                 }
                 let dir = tags::parent_dir(&uri).to_owned();
+                // Song entries carry only artist IDs and names.
+                for artist in song.artists.iter_mut().chain(&mut song.album_artists) {
+                    if let Some(full) = artist.id.as_ref().and_then(|id| artists.get(id)) {
+                        artist.sort_name = full.sort_name.clone();
+                        artist.music_brainz_id = full.music_brainz_id.clone();
+                    }
+                }
+                let album = song.album_id.as_ref().and_then(|id| albums.get(id));
+                let song_tags = tags::song_tags(&song, album);
                 let rg = song.replay_gain.clone().unwrap_or_default();
                 insert_song.execute(params![
                     song.id,
@@ -198,11 +220,11 @@ fn write_db(
                     rg.track_peak,
                     rg.album_gain,
                     rg.album_peak,
+                    tags::encode(&song_tags),
                 ])?;
                 let rowid = tx.last_insert_rowid();
-                let album = song.album_id.as_ref().and_then(|id| albums.get(id));
-                for (tag, value) in tags::song_tags(&song, album) {
-                    insert_tag.execute(params![rowid, tag, value])?;
+                for (tag, value) in song_tags {
+                    insert_tag.execute(params![tags::id(tag), value, rowid])?;
                 }
                 dirs.insert(dir);
             }

@@ -4,6 +4,7 @@
 //! database file beside it and swaps it in atomically when complete, so a
 //! sync never blocks clients.
 
+pub mod query;
 pub mod sync;
 pub mod tags;
 
@@ -144,8 +145,14 @@ impl Library {
                 let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0));
                 Ok(Stats {
                     songs: count("SELECT COUNT(*) FROM songs")? as u64,
-                    artists: count("SELECT COUNT(DISTINCT value) FROM tags WHERE tag = 'Artist'")? as u64,
-                    albums: count("SELECT COUNT(DISTINCT value) FROM tags WHERE tag = 'Album'")? as u64,
+                    artists: count(&format!(
+                        "SELECT COUNT(DISTINCT value) FROM tags WHERE tag = {}",
+                        tags::id(tags::ARTIST)
+                    ))? as u64,
+                    albums: count(&format!(
+                        "SELECT COUNT(DISTINCT value) FROM tags WHERE tag = {}",
+                        tags::id(tags::ALBUM)
+                    ))? as u64,
                     playtime: count("SELECT COALESCE(SUM(duration), 0) FROM songs")? as u64,
                     updated_at: conn
                         .query_row("SELECT value FROM meta WHERE key = 'synced_at'", [], |r| {
@@ -167,6 +174,7 @@ fn open_snapshot(path: &Path) -> Result<Snapshot> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .with_context(|| format!("opening {}", path.display()))?;
+    query::register_functions(&conn)?;
     Ok(Snapshot {
         conn: Mutex::new(conn),
     })

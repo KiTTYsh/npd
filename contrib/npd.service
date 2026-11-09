@@ -1,0 +1,11 @@
+[Unit]
+Description=npd - MPD-compatible daemon for Navidrome
+After=network-online.target pipewire.service
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.cargo/bin/npd run
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

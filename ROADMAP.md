@@ -184,12 +184,12 @@ Goal: hotkey and Plasma widget work against Navidrome.
 
 ### Phase 3 — Cache, local playback, scrobbling, handoff
 
-- [ ] Local playback: `[local] root = "/x/media/music"` in config. When set,
+- [x] Local playback: `[playback] local_root = "/x/media/music"`. When set,
       play `root/<uri>` instead of streaming; when unset, stream. A plain
-      switch, no detection of home vs. away. Fall back to streaming per
-      track only if the file is missing (renamed since the last sync).
-      Playback state (scrobbles, now playing, stars, play queue) still goes
-      to Navidrome, which keys it by song ID. Relies on "Report Real Path"
+      switch, no detection of home vs. away. Falls back to streaming per
+      track if the file is missing (renamed since the last sync). Playback
+      state (scrobbles, now playing, stars, play queue) still goes to
+      Navidrome, which keys it by song ID. Relies on "Report Real Path"
       (URIs mirror the filesystem layout); local files are never cached.
 
 - [ ] Cache store keyed by `(song id, format, bitrate)`; size-capped LRU plus
@@ -198,11 +198,15 @@ Goal: hotkey and Plasma widget work against Navidrome.
       used opportunistically in every mode.
 - [ ] Originals via `download`; optional transcoded profile via `stream`
       (`format`, `maxBitRate`). Use Opus, not MP3, to keep transitions gapless.
-- [ ] Scrobbling: `scrobble?submission=false` on start, `true` at 50% / 4 min.
+- [x] Scrobbling (`[playback] scrobble`, default on): `submission=false`
+      when a song starts playing, `true` after listening to half of it or
+      4 min. Listening time is counted, not position, so seeking ahead
+      doesn't scrobble; repeats of the same song count again.
 - [ ] Play queue handoff via `savePlayQueue` / `getPlayQueue` (resume at home
       where you paused at work). Opt-in, on stop/pause and on startup.
-- [ ] Local cover art cache so `albumart` / `readpicture` don't round-trip to
-      Navidrome every time.
+- [x] Cover art cache on disk (`[cache] art_size`, MiB, LRU by mtime),
+      including "no art". `albumart` is keyed by album (MPD reads the folder
+      image, so one fetch serves every track); `readpicture` by song.
 
 ### Phase 4 — "Up next" queue (Spotify-style)
 

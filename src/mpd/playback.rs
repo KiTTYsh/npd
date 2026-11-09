@@ -328,19 +328,16 @@ impl Session {
             .db(move |conn| query::song_by_uri(conn, &uri))
             .await?
             .ok_or_else(|| Ack::no_exist("No such song"))?;
-        let art = match song.cover_art {
+        // `albumart` is the album's cover (MPD reads the folder image), so
+        // all of an album's songs share one cached image; `readpicture` is
+        // the song's own embedded picture.
+        let id = match (picture, &song.album_id) {
+            (false, Some(album)) => Some(format!("al-{album}")),
+            _ => song.cover_art.clone(),
+        };
+        let art = match id {
+            Some(id) => self.ctx.art.get(&id).await.map_err(Ack::system)?,
             None => None,
-            Some(cover) => match self.ctx.art.get(&cover) {
-                Some(art) => Some(art),
-                None => {
-                    let fetched = self.ctx.client.cover_art(&cover).await.map_err(Ack::system)?;
-                    fetched.map(|art| {
-                        let art = Arc::new(art);
-                        self.ctx.art.insert(cover, Arc::clone(&art));
-                        art
-                    })
-                }
-            },
         };
         let Some(art) = art else {
             // readpicture answers "no picture" with an empty response.

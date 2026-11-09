@@ -272,6 +272,16 @@ impl Client {
         self.post(if on { "star" } else { "unstar" }, &params).await.map(drop)
     }
 
+    /// Reports a play: "now playing" without `submission`, a scrobble
+    /// (counted play, started at `time` ms since the epoch) with it.
+    pub async fn scrobble(&self, id: &str, submission: bool, time: Option<u64>) -> Result<()> {
+        let mut params = vec![("id", id.to_owned()), ("submission", submission.to_string())];
+        if let Some(t) = time {
+            params.push(("time", t.to_string()));
+        }
+        self.call("scrobble", &params).await.map(drop)
+    }
+
     /// Sets a 1–5 rating; 0 removes it.
     pub async fn set_rating(&self, id: &str, rating: u8) -> Result<()> {
         self.post("setRating", &[("id", id.to_owned()), ("rating", rating.to_string())]).await.map(drop)

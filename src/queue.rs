@@ -291,7 +291,7 @@ mod tests {
 
     fn song(n: usize) -> Arc<SongRow> {
         Arc::new(SongRow {
-            rowid: n as i64,
+            album_id: None,
             id: format!("s{n}"),
             uri: format!("{n}.flac"),
             duration: Some(100),

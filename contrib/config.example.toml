@@ -22,3 +22,14 @@ bind = ["127.0.0.1:6600"]
 [playlists]
 # favorites = "Favorites"   # virtual playlist of starred songs; "" disables
 # poll_interval = 120       # seconds between checks for changes made elsewhere; 0 disables
+
+[playback]
+# Play from a mounted copy of the library instead of streaming. Its layout
+# must match `mpc ls` (the server paths minus their common prefix). Songs
+# missing locally still stream.
+# local_root = "/mnt/music"
+# scrobble = true            # report plays to the server
+
+[cache]
+# dir = "/home/me/.cache/npd"   # default $XDG_CACHE_HOME/npd
+# art_size = 512                # cover art cache, MiB; 0 disables

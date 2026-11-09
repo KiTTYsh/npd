@@ -58,7 +58,7 @@ pub struct Query {
 /// A song as stored, with tags still encoded.
 #[derive(Debug, Clone)]
 pub struct SongRow {
-    pub rowid: i64,
+    pub album_id: Option<String>,
     pub id: String,
     pub uri: String,
     pub duration: Option<u32>,
@@ -77,11 +77,11 @@ impl SongRow {
 }
 
 const SONG_COLUMNS: &str =
-    "s.rowid, s.id, s.uri, s.duration, s.sample_rate, s.bit_depth, s.channels, s.added, s.cover_art, s.tags";
+    "s.album_id, s.id, s.uri, s.duration, s.sample_rate, s.bit_depth, s.channels, s.added, s.cover_art, s.tags";
 
 fn song_row(row: &Row) -> rusqlite::Result<SongRow> {
     Ok(SongRow {
-        rowid: row.get(0)?,
+        album_id: row.get(0)?,
         id: row.get(1)?,
         uri: row.get(2)?,
         duration: row.get(3)?,
@@ -481,7 +481,7 @@ impl SongRow {
             _ => uri,
         };
         Self {
-            rowid: 0,
+            album_id: song.album_id.clone(),
             id: song.id.clone(),
             uri,
             duration: song.duration,

@@ -1,3 +1,4 @@
+mod art;
 mod config;
 mod events;
 mod library;
@@ -5,6 +6,7 @@ mod mpd;
 mod player;
 mod playlists;
 mod queue;
+mod scrobble;
 mod state;
 mod stickers;
 mod subsonic;
@@ -137,9 +139,16 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         library.start_update();
     }
 
-    let player = player::Player::start(Arc::clone(&client), events.clone(), |tx| {
+    let sources = player::source::Sources::new(Arc::clone(&client), config.playback.local_root.clone());
+    if let Some(root) = &config.playback.local_root {
+        info!("playing from {}", root.display());
+    }
+    let player = player::Player::start(sources, events.clone(), |tx| {
         Ok(Box::new(player::mpv::MpvBackend::new(tx)?))
     })?;
+    if config.playback.scrobble {
+        scrobble::spawn(Arc::clone(&player), Arc::clone(&client));
+    }
     let state_path = state::path(&state_dir);
     if let Err(e) = state::restore(&player, &library, &state_path).await {
         warn!("restoring state: {e:#}");
@@ -150,13 +159,19 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
     playlists.start_polling(std::time::Duration::from_secs(config.playlists.poll_interval));
     let stickers = Stickers::open(&state_dir)?;
 
+    let art = art::ArtStore::new(
+        Arc::clone(&client),
+        config.cache_dir()?.join("art"),
+        config.cache.art_size * 1024 * 1024,
+    );
+
     let ctx = Arc::new(mpd::Ctx {
         library,
         player: Arc::clone(&player),
         client,
         playlists,
         stickers,
-        art: mpd::ArtCache::default(),
+        art,
         channels: Default::default(),
         events,
         started: std::time::Instant::now(),

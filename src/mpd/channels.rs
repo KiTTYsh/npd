@@ -99,11 +99,6 @@ impl Channels {
         let mut clients = self.clients.lock().unwrap();
         clients.get_mut(&client).map(|c| c.queue.drain(..).collect()).unwrap_or_default()
     }
-
-    pub fn subscriptions(&self, client: u64) -> BTreeSet<String> {
-        let clients = self.clients.lock().unwrap();
-        clients.get(&client).map(|c| c.channels.iter().cloned().collect()).unwrap_or_default()
-    }
 }
 
 #[cfg(test)]

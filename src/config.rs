@@ -13,6 +13,10 @@ pub struct Config {
     pub paths: PathsConfig,
     #[serde(default)]
     pub playlists: PlaylistsConfig,
+    #[serde(default)]
+    pub playback: PlaybackConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +97,39 @@ impl Default for PlaylistsConfig {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PlaybackConfig {
+    /// A mounted copy of the library, laid out like npd's URIs (the server
+    /// paths with their common prefix removed). When set, songs play from
+    /// here instead of streaming.
+    pub local_root: Option<PathBuf>,
+    /// Report plays to the server ("now playing", play counts, and any
+    /// scrobbling the server forwards to Last.fm / ListenBrainz).
+    pub scrobble: bool,
+}
+
+impl Default for PlaybackConfig {
+    fn default() -> Self {
+        Self { local_root: None, scrobble: true }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct CacheConfig {
+    /// Defaults to `$XDG_CACHE_HOME/npd`.
+    pub dir: Option<PathBuf>,
+    /// Cover art cache size in MiB; 0 disables it.
+    pub art_size: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self { dir: None, art_size: 512 }
+    }
+}
+
 pub enum Credentials {
     Password { username: String, password: String },
     Token { username: String, token: String, salt: String },
@@ -110,6 +147,15 @@ impl Config {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    pub fn cache_dir(&self) -> Result<PathBuf> {
+        match &self.cache.dir {
+            Some(dir) => Ok(dir.clone()),
+            None => Ok(dirs::cache_dir()
+                .context("cannot determine cache directory")?
+                .join("npd")),
+        }
     }
 
     pub fn state_dir(&self) -> Result<PathBuf> {

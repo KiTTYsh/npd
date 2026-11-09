@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn song_rendering() {
         let row = SongRow {
-            rowid: 1,
+            album_id: None,
             id: "x".into(),
             uri: "A/B/c.flac".into(),
             duration: Some(61),

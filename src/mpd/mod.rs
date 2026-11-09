@@ -21,33 +21,11 @@ use tracing::{info, warn};
 use crate::config::MpdConfig;
 use crate::events::EventBus;
 use crate::library::Library;
+use crate::art::ArtStore;
 use crate::player::Player;
 use crate::playlists::Playlists;
 use crate::stickers::Stickers;
 use crate::subsonic::Client;
-
-/// Recently fetched cover art. Clients read art in chunks (`albumart URI
-/// OFFSET`), so the whole image is kept between requests.
-#[derive(Default)]
-pub struct ArtCache(std::sync::Mutex<std::collections::VecDeque<(String, Arc<(Vec<u8>, String)>)>>);
-
-impl ArtCache {
-    const CAPACITY: usize = 16;
-
-    pub fn get(&self, id: &str) -> Option<Arc<(Vec<u8>, String)>> {
-        let cache = self.0.lock().unwrap();
-        cache.iter().find(|(k, _)| k == id).map(|(_, v)| Arc::clone(v))
-    }
-
-    pub fn insert(&self, id: String, art: Arc<(Vec<u8>, String)>) {
-        let mut cache = self.0.lock().unwrap();
-        cache.retain(|(k, _)| *k != id);
-        if cache.len() == Self::CAPACITY {
-            cache.pop_front();
-        }
-        cache.push_back((id, art));
-    }
-}
 
 /// Protocol version announced to clients. Clients enable features by
 /// version; 0.23 covers filter expressions, `readpicture`, relative queue
@@ -123,7 +101,7 @@ pub struct Ctx {
     pub client: Arc<Client>,
     pub playlists: Arc<Playlists>,
     pub stickers: Stickers,
-    pub art: ArtCache,
+    pub art: ArtStore,
     pub channels: channels::Channels,
     pub events: EventBus,
     pub started: Instant,

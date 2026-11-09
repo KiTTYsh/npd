@@ -6,6 +6,7 @@
 
 pub mod backend;
 pub mod mpv;
+pub mod source;
 
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -16,8 +17,8 @@ use tracing::{debug, warn};
 use crate::events::{EventBus, Subsystem};
 use crate::library::query::SongRow;
 use crate::queue::{ItemId, Queue, Single};
-use crate::subsonic::Client;
 use backend::{AudioInfo, Backend, BackendEvent, EntryId};
+use source::Sources;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -108,12 +109,15 @@ struct Inner {
     device: String,
     replay_gain: String,
     error: Option<String>,
+    /// Counts songs started, so observers can tell a new play of the same
+    /// song (repeat) from the old one.
+    plays: u64,
 }
 
 pub struct Player {
     inner: Mutex<Inner>,
     backend: Box<dyn Backend>,
-    client: Arc<Client>,
+    sources: Sources,
     events: EventBus,
 }
 
@@ -121,7 +125,7 @@ impl Player {
     /// Creates the player and starts handling backend events. `make_backend`
     /// receives the sender for those events.
     pub fn start(
-        client: Arc<Client>,
+        sources: Sources,
         events: EventBus,
         make_backend: impl FnOnce(mpsc::UnboundedSender<BackendEvent>) -> anyhow::Result<Box<dyn Backend>>,
     ) -> anyhow::Result<Arc<Self>> {
@@ -137,9 +141,10 @@ impl Player {
                 device: DEFAULT_DEVICE.into(),
                 replay_gain: "off".into(),
                 error: None,
+                plays: 0,
             }),
             backend,
-            client,
+            sources,
             events,
         });
         let weak = Arc::downgrade(&player);
@@ -163,7 +168,7 @@ impl Player {
     }
 
     fn url(&self, song: &SongRow) -> String {
-        self.client.stream_url(&song.id)
+        self.sources.locate(song)
     }
 
     /// Brings the backend playlist in line with `[current, next]`. With
@@ -188,6 +193,7 @@ impl Player {
             let entry = self.backend.load(&self.url(&current.1), true, start)?;
             inner.loaded = vec![(entry, current.0)];
             inner.error = None;
+            inner.plays += 1;
         }
 
         let next = inner.queue.next().and_then(|p| inner.queue.get(p)).map(|i| (i.id, Arc::clone(&i.song)));
@@ -237,6 +243,7 @@ impl Player {
                     }
                 }
                 inner.loaded.drain(..idx);
+                inner.plays += 1;
                 if let Err(e) = self.sync(&mut inner, false, None) {
                     warn!("{e}");
                 }
@@ -612,6 +619,14 @@ impl Player {
     }
 
     // --- Status ----------------------------------------------------------
+
+    /// The current song, its play counter and the player state, for the
+    /// scrobbler.
+    pub fn now_playing(&self) -> Option<(u64, Arc<SongRow>, State)> {
+        let inner = self.lock();
+        let item = inner.queue.current_item()?;
+        Some((inner.plays, Arc::clone(&item.song), inner.state))
+    }
 
     pub fn status(&self) -> Status {
         let inner = self.lock();

@@ -9,7 +9,7 @@ mod playback;
 mod stored;
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -198,7 +198,8 @@ pub async fn serve(config: &MpdConfig, ctx: Arc<Ctx>) -> Result<()> {
         });
     }
 
-    if let Some(path) = &config.socket {
+    if let Some(path) = config.socket_path()? {
+        let path = &path;
         let listener = bind_unix(path)?;
         info!("listening on {}", path.display());
         let ctx = Arc::clone(&ctx);
@@ -216,11 +217,15 @@ pub async fn serve(config: &MpdConfig, ctx: Arc<Ctx>) -> Result<()> {
     Ok(())
 }
 
-fn bind_unix(path: &PathBuf) -> Result<UnixListener> {
+fn bind_unix(path: &Path) -> Result<UnixListener> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    // A stale socket from a previous run would make bind fail.
+    // A stale socket from a previous run (ours or MPD's) would make bind
+    // fail, but one something still listens on must be left alone.
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        anyhow::bail!("{} is in use by another server", path.display());
+    }
     match std::fs::remove_file(path) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             Err(e).with_context(|| format!("removing {}", path.display()))?

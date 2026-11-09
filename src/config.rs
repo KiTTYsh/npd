@@ -38,7 +38,8 @@ pub struct ServerConfig {
 pub struct MpdConfig {
     /// TCP addresses to listen on.
     pub bind: Vec<String>,
-    /// Unix socket path; disabled when unset.
+    /// Unix socket path; disabled when unset. `~` and `$XDG_RUNTIME_DIR`
+    /// are expanded.
     pub socket: Option<PathBuf>,
 }
 
@@ -48,6 +49,21 @@ impl Default for MpdConfig {
             bind: vec!["127.0.0.1:6600".into()],
             socket: None,
         }
+    }
+}
+
+impl MpdConfig {
+    pub fn socket_path(&self) -> Result<Option<PathBuf>> {
+        let Some(path) = &self.socket else { return Ok(None) };
+        let text = path.to_str().context("mpd.socket is not UTF-8")?;
+        let expanded = if let Some(rest) = text.strip_prefix("~/") {
+            dirs::home_dir().context("cannot determine home directory")?.join(rest)
+        } else if let Some(rest) = text.strip_prefix("$XDG_RUNTIME_DIR/") {
+            dirs::runtime_dir().context("XDG_RUNTIME_DIR is not set")?.join(rest)
+        } else {
+            path.clone()
+        };
+        Ok(Some(expanded))
     }
 }
 

@@ -12,7 +12,9 @@ password_command = "pass show navidrome"
 
 [mpd]
 bind = ["127.0.0.1:6600"]
-# socket = "/run/user/1000/npd/socket"
+# Unix socket; ~ and $XDG_RUNTIME_DIR are expanded. MPD's usual path lets
+# clients that look for it (mpd-mpris) connect without flags.
+# socket = "$XDG_RUNTIME_DIR/mpd/socket"
 
 [paths]
 # state_dir = "/home/me/.local/state/npd"   # library mirror; default $XDG_STATE_HOME/npd

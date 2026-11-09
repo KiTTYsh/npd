@@ -22,6 +22,8 @@ pub enum Error {
     Api { code: u32, message: String },
     #[error("malformed response: {0}")]
     Decode(String),
+    #[error("{0}")]
+    Io(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -54,6 +56,36 @@ fn unwrap_envelope(mut body: Value) -> Result<Value> {
         });
     }
     Ok(inner)
+}
+
+/// Audio format to fetch songs in: the original file (`raw`) or a
+/// server-side transcode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    pub format: String,
+    /// kbps; 0 for the server's default.
+    pub max_bitrate: u32,
+}
+
+impl Profile {
+    pub fn is_original(&self) -> bool {
+        self.format == "raw"
+    }
+
+    /// Distinguishes cached files of different profiles.
+    pub fn tag(&self) -> String {
+        if self.is_original() || self.max_bitrate == 0 {
+            self.format.clone()
+        } else {
+            format!("{}{}", self.format, self.max_bitrate)
+        }
+    }
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self { format: "raw".into(), max_bitrate: 0 }
+    }
 }
 
 pub struct Client {
@@ -163,16 +195,48 @@ impl Client {
         Ok(body.search_result3.song)
     }
 
-    /// URL streaming a song's original file (no transcoding). Carries
-    /// credentials, so it must not be logged at info level or above.
-    pub fn stream_url(&self, id: &str) -> String {
+    /// URL streaming a song in `profile`. Carries credentials, so it must
+    /// not be logged at info level or above.
+    pub fn stream_url(&self, id: &str, profile: &Profile) -> String {
         let mut url = reqwest::Url::parse(&format!("{}/rest/stream", self.base_url))
             .expect("base URL was validated by Client::new");
         url.query_pairs_mut()
             .extend_pairs(self.auth_params())
             .append_pair("id", id)
-            .append_pair("format", "raw");
+            .append_pair("format", &profile.format);
+        if profile.max_bitrate > 0 {
+            url.query_pairs_mut().append_pair("maxBitRate", &profile.max_bitrate.to_string());
+        }
         url.into()
+    }
+
+    /// Downloads a song in `profile` to `path`: the original file via
+    /// `download`, a transcode via `stream`.
+    pub async fn download_to(&self, id: &str, profile: &Profile, path: &std::path::Path) -> Result<u64> {
+        use tokio::io::AsyncWriteExt;
+        let request = if profile.is_original() {
+            self.http.get(format!("{}/rest/download", self.base_url)).query(&self.auth_params()).query(&[("id", id)])
+        } else {
+            self.http.get(self.stream_url(id, profile))
+        };
+        // Large files on slow links outlast the client's default timeout.
+        let mut resp = request.timeout(Duration::from_secs(3600)).send().await?.error_for_status()?;
+        let is_error = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|m| m.starts_with("application/json") || m.starts_with("text/xml"));
+        if is_error {
+            return Err(unwrap_envelope(resp.json().await?).err().unwrap_or(Error::Decode("unexpected response".into())));
+        }
+        let mut file = tokio::fs::File::create(path).await.map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        let mut written = 0;
+        while let Some(chunk) = resp.chunk().await? {
+            file.write_all(&chunk).await.map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+            written += chunk.len() as u64;
+        }
+        file.flush().await.map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
+        Ok(written)
     }
 
     /// Cover art bytes and MIME type. `None` if the server has none.

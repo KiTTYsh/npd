@@ -393,6 +393,24 @@ impl Player {
         Ok(())
     }
 
+    /// The current song (or the first, when none is) and those after it in
+    /// play order, up to `n` songs.
+    pub fn upcoming(&self, n: usize) -> Vec<Arc<SongRow>> {
+        let inner = self.lock();
+        let q = &inner.queue;
+        let start = q.current().or(if q.len() > 0 { Some(0) } else { None });
+        let mut out = Vec::new();
+        let mut pos = start;
+        while let Some(p) = pos {
+            if out.len() == n {
+                break;
+            }
+            out.push(Arc::clone(&q.items()[p].song));
+            pos = q.next_after(p).filter(|&next| Some(next) != start);
+        }
+        out
+    }
+
     pub fn state(&self) -> State {
         self.lock().state
     }

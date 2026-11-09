@@ -192,12 +192,20 @@ Goal: hotkey and Plasma widget work against Navidrome.
       Navidrome, which keys it by song ID. Relies on "Report Real Path"
       (URIs mirror the filesystem layout); local files are never cached.
 
-- [ ] Cache store keyed by `(song id, format, bitrate)`; size-capped LRU plus
-      a pinned set.
-- [ ] Modes: `stream`, `prefetch = N`, `pin_favorites`. Cached files are
-      used opportunistically in every mode.
-- [ ] Originals via `download`; optional transcoded profile via `stream`
-      (`format`, `maxBitRate`). Use Opus, not MP3, to keep transitions gapless.
+- [x] Audio cache in `$XDG_CACHE_HOME/npd/audio`, files named
+      `<song id>.<profile>` (`raw`, `opus128`, …); unpinned files capped at
+      `[cache] audio_size` MiB and evicted least recently used, never
+      evicting the prefetch window or pins.
+- [x] Modes: `prefetch = N` (the current song and N after it in play
+      order, honouring random/repeat), `pin_favorites` (every starred song,
+      never evicted, not counted against the cap); `prefetch = 0` streams
+      only. One background download at a time, prefetch before pins;
+      failures back off for 10 min. Cached files are used whenever present.
+      Songs on the local mount aren't prefetched, but pins still download
+      there (that's how favorites get onto a laptop before it leaves).
+- [x] Originals via `download`; optional transcoded profile via `stream`
+      (`[playback] format`, `max_bitrate`), used for streaming too. Use
+      Opus, not MP3, to keep transitions gapless.
 - [x] Scrobbling (`[playback] scrobble`, default on): `submission=false`
       when a song starts playing, `true` after listening to half of it or
       4 min. Listening time is counted, not position, so seeking ahead

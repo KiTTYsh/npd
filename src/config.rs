@@ -107,6 +107,12 @@ pub struct PlaybackConfig {
     /// Report plays to the server ("now playing", play counts, and any
     /// scrobbling the server forwards to Last.fm / ListenBrainz).
     pub scrobble: bool,
+    /// Server transcoding for streams and the audio cache: `raw` (the
+    /// original file) or a format the server is set up to transcode to.
+    /// Prefer `opus`: it stays gapless, MP3 doesn't.
+    pub format: String,
+    /// kbps for transcoding; 0 for the server's default.
+    pub max_bitrate: u32,
     /// Share the play queue with other devices through the server: save it
     /// on pause/stop, take over another device's on resume.
     pub handoff: bool,
@@ -114,7 +120,7 @@ pub struct PlaybackConfig {
 
 impl Default for PlaybackConfig {
     fn default() -> Self {
-        Self { local_root: None, scrobble: true, handoff: false }
+        Self { local_root: None, scrobble: true, format: "raw".into(), max_bitrate: 0, handoff: false }
     }
 }
 
@@ -125,11 +131,18 @@ pub struct CacheConfig {
     pub dir: Option<PathBuf>,
     /// Cover art cache size in MiB; 0 disables it.
     pub art_size: u64,
+    /// Audio cache size in MiB, not counting pinned favorites; 0 disables
+    /// the audio cache.
+    pub audio_size: u64,
+    /// Songs after the current one to download ahead; 0 streams only.
+    pub prefetch: usize,
+    /// Keep every starred song cached.
+    pub pin_favorites: bool,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
-        Self { dir: None, art_size: 512 }
+        Self { dir: None, art_size: 512, audio_size: 2048, prefetch: 0, pin_favorites: false }
     }
 }
 

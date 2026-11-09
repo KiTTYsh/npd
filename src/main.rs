@@ -1,4 +1,5 @@
 mod art;
+mod cache;
 mod config;
 mod events;
 mod handoff;
@@ -140,7 +141,31 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         library.start_update();
     }
 
-    let sources = player::source::Sources::new(Arc::clone(&client), config.playback.local_root.clone());
+    let profile = subsonic::Profile {
+        format: config.playback.format.clone(),
+        max_bitrate: config.playback.max_bitrate,
+    };
+    let cache = if config.cache.audio_size > 0 || config.cache.pin_favorites {
+        Some(cache::AudioCache::open(
+            Arc::clone(&client),
+            profile.clone(),
+            cache::CacheConfig {
+                dir: config.cache_dir()?.join("audio"),
+                size: config.cache.audio_size * 1024 * 1024,
+                prefetch: config.cache.prefetch,
+                pin_favorites: config.cache.pin_favorites,
+                local_root: config.playback.local_root.clone(),
+            },
+        )?)
+    } else {
+        None
+    };
+    let sources = player::source::Sources::new(
+        Arc::clone(&client),
+        profile,
+        config.playback.local_root.clone(),
+        cache.clone(),
+    );
     if let Some(root) = &config.playback.local_root {
         info!("playing from {}", root.display());
     }
@@ -166,6 +191,9 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
 
     let playlists = Playlists::new(Arc::clone(&client), events.clone(), &config.playlists.favorites);
     playlists.start_polling(std::time::Duration::from_secs(config.playlists.poll_interval));
+    if let Some(cache) = &cache {
+        cache.spawn(Arc::clone(&player), Arc::clone(&playlists), &events);
+    }
     let stickers = Stickers::open(&state_dir)?;
 
     let art = art::ArtStore::new(

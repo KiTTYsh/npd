@@ -33,7 +33,16 @@ bind = ["127.0.0.1:6600"]
 # the server: saved on pause/stop, and another device's queue is taken
 # over when you resume here.
 # handoff = false
+# Transcode on the server: "raw" plays originals. Use "opus" (gapless), not
+# MP3, if the server has an Opus transcoding set up.
+# format = "raw"
+# max_bitrate = 0            # kbps; 0 = server default
 
 [cache]
 # dir = "/home/me/.cache/npd"   # default $XDG_CACHE_HOME/npd
 # art_size = 512                # cover art cache, MiB; 0 disables
+# Audio cache, in the [playback] format. Cached songs are used whenever
+# present; these control what gets downloaded:
+# audio_size = 2048             # MiB, not counting pinned favorites; 0 disables
+# prefetch = 0                  # songs ahead of the current one; 0 = stream only
+# pin_favorites = false         # keep every starred song cached

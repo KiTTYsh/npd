@@ -227,17 +227,23 @@ Separate the **context** (the album/playlist being played) from a user
 **up-next** list that plays before the rest of the context. Clients still
 see one flat MPD queue, so this needs no client changes:
 
-- Songs inserted relative to the current song (`mpc insert`,
-  `add <uri> +0` / `addid <uri> +N`, Cantata's "play next") are marked
-  up-next. Plain `add` / `load` extend the context.
-- Up-next songs form an ordered block right after the current song; new
-  inserts go to the end of that block, not directly after current.
-- Up-next songs are always consumed after playing, whatever the `consume`
-  setting.
-- `random` / `repeat` apply to the context only; up-next always plays next,
-  in order.
-- Replacing the context (`clear` + `load`/`add`) drops the up-next block
-  too, which is plain MPD `clear` behaviour.
+- [x] Songs added relative to the current song (`add <uri> +N`,
+      `addid <uri> +N`), added at the position right after it, or moved
+      there (`mpc insert` is `add` + `move <new> <current+1>`) are marked
+      up-next. Plain `add` / `load` extend the context.
+- [x] Up-next songs form an ordered block right after the current song; new
+      ones line up at the end of that block. Moving songs within the block
+      reorders it; moving them out returns them to the context.
+- [x] Up-next songs are removed once playback moves past them (finished,
+      skipped, or jumped away from), whatever the `consume` setting.
+- [x] `random` / `repeat` apply to the context only; up-next always plays
+      next, in order, and the context resumes after the song it was queued
+      behind. The random order is kept by song ID, so adding songs no longer
+      reshuffles what has already played.
+- [x] Up-next songs report `Prio: 1` in queue listings (MPD's "plays first"),
+      so clients that show priority mark them. Saved across restarts.
+- [x] Replacing the context (`clear` + `load`/`add`) drops the up-next block
+      too, which is plain MPD `clear` behaviour.
 
 ### Later / maybe
 

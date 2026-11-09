@@ -53,6 +53,17 @@ fn bad_index() -> Error {
     Error::BadArg("Bad song index".into())
 }
 
+/// Where added songs go.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Placement {
+    /// The end of the context.
+    End,
+    /// A position in the context.
+    At(usize),
+    /// The end of the up-next block.
+    UpNext,
+}
+
 /// A snapshot for `status`.
 #[derive(Debug, Clone)]
 pub struct Status {
@@ -86,6 +97,8 @@ pub struct Output {
 pub struct SavedState {
     /// Server song IDs, in queue order.
     pub songs: Vec<String>,
+    /// Positions of up-next songs.
+    pub up_next: Vec<usize>,
     pub current: Option<usize>,
     pub elapsed: Option<f64>,
     pub repeat: bool,
@@ -288,6 +301,7 @@ impl Player {
         let q = &inner.queue;
         SavedState {
             songs: q.items().iter().map(|i| i.song.id.clone()).collect(),
+            up_next: q.items().iter().enumerate().filter(|(_, i)| i.up_next).map(|(p, _)| p).collect(),
             current: q.current(),
             elapsed: if inner.state == State::Stop { None } else { self.backend.position() },
             repeat: q.repeat,
@@ -320,6 +334,11 @@ impl Player {
         inner.queue.single = saved.single;
         inner.queue.consume = saved.consume;
         inner.queue.set_current(current);
+        let up_next_ids: Vec<&String> = saved.up_next.iter().filter_map(|&p| saved.songs.get(p)).collect();
+        let up_next: Vec<usize> = (0..inner.queue.len())
+            .filter(|&p| up_next_ids.contains(&&inner.queue.items()[p].song.id))
+            .collect();
+        inner.queue.mark_up_next(&up_next);
         inner.queue.set_random(saved.random);
         if current.is_some() {
             inner.state = State::Pause;
@@ -336,6 +355,21 @@ impl Player {
 
     /// Resolves an MPD position argument: absolute, or `+N` / `-N`
     /// relative to the current song.
+    /// Where an `add`-style position argument puts songs. Positions
+    /// relative to the current song (`+N`, as `mpc insert` sends) and an
+    /// absolute position right after it ("insert after current") queue them
+    /// up next.
+    pub fn placement(&self, arg: Option<&str>) -> Result<Placement> {
+        let Some(arg) = arg else { return Ok(Placement::End) };
+        let pos = self.resolve_position(arg)?;
+        let after_current = self.lock().queue.current().is_some_and(|c| pos == c + 1);
+        if arg.starts_with('+') || after_current {
+            Ok(Placement::UpNext)
+        } else {
+            Ok(Placement::At(pos))
+        }
+    }
+
     pub fn resolve_position(&self, arg: &str) -> Result<usize> {
         let inner = self.lock();
         let len = inner.queue.len();
@@ -352,9 +386,13 @@ impl Player {
         if pos > len { Err(bad_index()) } else { Ok(pos) }
     }
 
-    pub fn add(&self, songs: Vec<Arc<SongRow>>, at: Option<usize>) -> Result<Vec<ItemId>> {
+    pub fn add(&self, songs: Vec<Arc<SongRow>>, placement: Placement) -> Result<Vec<ItemId>> {
         let mut inner = self.lock();
-        let ids = inner.queue.add(songs, at);
+        let ids = match placement {
+            Placement::End => inner.queue.add(songs, None),
+            Placement::At(p) => inner.queue.add(songs, Some(p)),
+            Placement::UpNext => inner.queue.add_up_next(songs),
+        };
         self.sync(&mut inner, false, None)?;
         drop(inner);
         self.emit(&[Subsystem::Playlist]);

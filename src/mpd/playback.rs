@@ -59,6 +59,10 @@ pub(super) fn pos_range(arg: &str, len: usize) -> Result<Range<usize>, Ack> {
 fn queue_item(out: &mut Out, pos: usize, item: &Item, session: &Session) {
     format::song(out, &item.song, session.tag_mask);
     let _ = write!(out, "Pos: {pos}\nId: {}\n", item.id);
+    // MPD's priority means "plays first", which is what up-next songs do.
+    if item.up_next {
+        out.push_str("Prio: 1\n");
+    }
 }
 
 impl Session {
@@ -143,10 +147,7 @@ impl Session {
 
             "add" | "addid" => {
                 let uri = normalize_dir(arg(args, 0)?);
-                let at = match args.get(1) {
-                    Some(p) => Some(player.resolve_position(p)?),
-                    None => None,
-                };
+                let at = player.placement(args.get(1).map(String::as_str))?;
                 let u = uri.clone();
                 let songs = self.db(move |conn| query::songs_for_uri(conn, &u)).await?;
                 let songs = match songs {
@@ -168,10 +169,7 @@ impl Session {
                 if parsed.filter.is_none() {
                     return Err(Ack::arg("incorrect arguments"));
                 }
-                let at = match &parsed.position {
-                    Some(p) => Some(player.resolve_position(p)?),
-                    None => None,
-                };
+                let at = player.placement(parsed.position.as_deref())?;
                 let query = Query { filter: parsed.filter, fold, sort: parsed.sort, window: parsed.window };
                 let songs = self.db(move |conn| query::find(conn, &query)).await?;
                 player.add(songs.into_iter().map(Arc::new).collect(), at)?;

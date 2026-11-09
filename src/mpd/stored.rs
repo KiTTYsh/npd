@@ -51,10 +51,7 @@ impl Session {
             }
             "load" => {
                 let songs = self.playlist_songs(arg(args, 0)?, args.get(1)).await?;
-                let at = match args.get(2) {
-                    Some(p) => Some(self.ctx.player.resolve_position(p)?),
-                    None => None,
-                };
+                let at = self.ctx.player.placement(args.get(2).map(String::as_str))?;
                 self.ctx.player.add(songs.into_iter().map(Arc::new).collect(), at)?;
                 Ok(())
             }

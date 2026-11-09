@@ -172,7 +172,11 @@ pub fn tag_sel(name: &str) -> Result<TagSel, String> {
     if name.eq_ignore_ascii_case("any") {
         return Ok(TagSel::Any);
     }
-    tags::canonical(name).map(TagSel::Tag).ok_or_else(|| format!("unknown tag type: {name}"))
+    match tags::canonical(name) {
+        Some(tag) => Ok(TagSel::Tag(tag)),
+        None if tags::is_unsupported(name) => Ok(TagSel::Absent),
+        None => Err(format!("unknown tag type: {name}")),
+    }
 }
 
 /// Strips slashes MPD clients sometimes add around directory names.

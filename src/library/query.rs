@@ -14,6 +14,8 @@ pub enum TagSel {
     Tag(&'static str),
     /// Any tag, or the URI.
     Any,
+    /// A valid MPD tag that no song has.
+    Absent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -128,7 +130,7 @@ impl Sql {
     /// A string comparison of `column` against `value`.
     fn compare(&mut self, column: &str, op: Op, value: &str, fold: bool) {
         let col = if fold { format!("fold({column})") } else { column.to_owned() };
-        let mut arg = |sql: &mut Self| {
+        let arg = |sql: &mut Self| {
             if fold {
                 sql.text.push_str("fold(");
                 sql.param(value.to_owned());
@@ -172,6 +174,10 @@ impl Sql {
                 self.text.push_str(" AND ");
                 self.compare("value", *op, value, fold);
                 self.text.push(')');
+            }
+            // Only `(Tag == "")` matches a tag nobody has.
+            Filter::Tag { tag: TagSel::Absent, op, value } => {
+                self.text.push(if *op == Op::Eq && value.is_empty() { '1' } else { '0' });
             }
             Filter::Tag { tag: TagSel::Any, op, value } => {
                 self.text.push_str("(s.rowid IN (SELECT song FROM tags WHERE ");
@@ -248,6 +254,18 @@ pub fn find(conn: &Connection, query: &Query) -> rusqlite::Result<Vec<SongRow>> 
     }
     let mut stmt = conn.prepare(&text)?;
     stmt.query_map(params_from_iter(sql.params), song_row)?.collect()
+}
+
+/// Songs by server ID, in the given order; missing ones are skipped.
+pub fn songs_by_ids(conn: &Connection, ids: &[String]) -> rusqlite::Result<Vec<SongRow>> {
+    let mut stmt = conn.prepare(&format!("SELECT {SONG_COLUMNS} FROM songs s WHERE s.id = ?"))?;
+    let mut songs = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(song) = stmt.query_row([id], song_row).optional()? {
+            songs.push(song);
+        }
+    }
+    Ok(songs)
 }
 
 pub fn song_by_uri(conn: &Connection, uri: &str) -> rusqlite::Result<Option<SongRow>> {
@@ -329,6 +347,18 @@ pub fn count(
     };
     let mut stmt = conn.prepare(&text)?;
     stmt.query_map(params_from_iter(sql.params), row)?.collect()
+}
+
+/// The song at `uri`, or every song under it if it is a directory; `None`
+/// if neither exists.
+pub fn songs_for_uri(conn: &Connection, uri: &str) -> rusqlite::Result<Option<Vec<SongRow>>> {
+    if let Some(song) = song_by_uri(conn, uri)? {
+        return Ok(Some(vec![song]));
+    }
+    if !dir_exists(conn, uri)? {
+        return Ok(None);
+    }
+    find(conn, &Query { filter: Some(Filter::Base(uri.to_owned())), ..Default::default() }).map(Some)
 }
 
 pub fn dir_exists(conn: &Connection, dir: &str) -> rusqlite::Result<bool> {
@@ -477,6 +507,8 @@ mod tests {
         assert_eq!(uris(missing), ["A/X/2.flac", "B/1.mp3"]);
         let starts = find(&conn, &q(tag(tags::ARTIST, Op::StartsWith, "Be"), false)).unwrap();
         assert_eq!(uris(starts), ["B/1.mp3", "B/Y/1.mp3"]);
+        let absent = |op, v: &str| find(&conn, &q(Filter::Tag { tag: TagSel::Absent, op, value: v.into() }, false)).unwrap().len();
+        assert_eq!((absent(Op::Eq, ""), absent(Op::Eq, "x"), absent(Op::Ne, "x")), (4, 0, 4));
         let any = find(&conn, &q(Filter::Tag { tag: TagSel::Any, op: Op::Contains, value: "y/1".into() }, true)).unwrap();
         assert_eq!(uris(any), ["B/Y/1.mp3"]);
         let and = Filter::And(vec![tag(tags::ARTIST, Op::Eq, "Bee"), Filter::Not(Box::new(Filter::Base("B/Y".into())))]);

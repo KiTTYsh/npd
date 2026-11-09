@@ -2,6 +2,9 @@ mod config;
 mod events;
 mod library;
 mod mpd;
+mod player;
+mod queue;
+mod state;
 mod subsonic;
 
 use std::io::IsTerminal;
@@ -10,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tracing::info;
+use tracing::{info, warn};
 
 use config::Config;
 use events::EventBus;
@@ -123,20 +126,38 @@ async fn ping(client: &subsonic::Client) -> Result<()> {
 
 async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
     let events = EventBus::new();
-    let library = Library::open(&config.state_dir()?, Arc::clone(&client), events.clone())?;
+    let state_dir = config.state_dir()?;
+    let library = Library::open(&state_dir, Arc::clone(&client), events.clone())?;
     if library.is_empty() {
         info!("no library yet; starting initial sync");
         library.start_update();
     }
 
+    let player = player::Player::start(Arc::clone(&client), events.clone(), |tx| {
+        Ok(Box::new(player::mpv::MpvBackend::new(tx)?))
+    })?;
+    let state_path = state::path(&state_dir);
+    if let Err(e) = state::restore(&player, &library, &state_path).await {
+        warn!("restoring state: {e:#}");
+    }
+    state::spawn_saver(Arc::clone(&player), &events, state_path.clone());
+
     let ctx = Arc::new(mpd::Ctx {
         library,
+        player: Arc::clone(&player),
+        client,
+        art: mpd::ArtCache::default(),
         events,
         started: std::time::Instant::now(),
     });
     mpd::serve(&config.mpd, ctx).await?;
 
-    tokio::signal::ctrl_c().await?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        r = tokio::signal::ctrl_c() => r?,
+        _ = sigterm.recv() => {}
+    }
     info!("shutting down");
+    state::save(&player, &state_path)?;
     Ok(())
 }

@@ -47,6 +47,31 @@ pub const ALL: &[&str] = &[
     MB_TRACK_ID,
 ];
 
+/// MPD tags npd never produces. Clients may still name them (`tagtypes`,
+/// filters); they behave as tags no song has.
+pub const UNSUPPORTED: &[&str] = &[
+    "TitleSort",
+    "Name",
+    "Mood",
+    "ComposerSort",
+    "Performer",
+    "Conductor",
+    "Work",
+    "Ensemble",
+    "Movement",
+    "MovementNumber",
+    "ShowMovement",
+    "Location",
+    "Grouping",
+    "MUSICBRAINZ_RELEASETRACKID",
+    "MUSICBRAINZ_WORKID",
+    "MUSICBRAINZ_RELEASEGROUPID",
+];
+
+pub fn is_unsupported(name: &str) -> bool {
+    UNSUPPORTED.iter().any(|t| t.eq_ignore_ascii_case(name))
+}
+
 /// Looks up a tag name case-insensitively, returning its canonical spelling.
 pub fn canonical(name: &str) -> Option<&'static str> {
     ALL.iter().copied().find(|t| t.eq_ignore_ascii_case(name))

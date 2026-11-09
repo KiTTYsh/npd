@@ -123,23 +123,31 @@ Goal: hotkey and Plasma widget work against Navidrome.
         `ACK` error codes, filter expressions and legacy `TAG VALUE` pairs,
         `sort` / `window` / `group`.
   - [x] `idle` / `noidle` with correct subsystem events.
-  - [ ] Status: `status`, `currentsong` (stubs until the player exists),
-        [x] `stats`, `ping`, `close`, `tagtypes`, `commands`, `decoders`.
+  - [x] Status: `status`, `currentsong`, `stats`, `ping`, `close`,
+        `tagtypes`, `commands`, `decoders`. Unsupported MPD tags (Name,
+        Performer, ...) are accepted and behave as empty.
   - [x] Library: `lsinfo`, `list`, `find`, `search`, `count`, `searchcount`,
         `listall`, `listallinfo`. Unicode case folding for `search`.
-  - [ ] Queue: `add`, `addid`, `delete`, `deleteid`, `clear`, `move`,
-        `playlistinfo`, `playlistid`, `shuffle`.
-  - [ ] Playback: `play`, `playid`, `pause`, `stop`, `next`, `previous`,
-        `seek`, `seekid`, `seekcur`, `setvol`, `random`, `repeat`, `single`,
-        `consume`.
-  - [ ] Outputs: `outputs`, `enableoutput`, `disableoutput`, `toggleoutput`.
-  - [ ] Art: `albumart`, `readpicture` via `getCoverArt`.
+  - [x] Queue: `add`, `addid` (with relative positions), `delete`,
+        `deleteid`, `clear`, `move`, `moveid`, `playlistinfo`, `playlistid`,
+        `plchanges`, `plchangesposid`, `shuffle`, `findadd`, `searchadd`.
+  - [x] Playback: `play`, `playid`, `pause`, `stop`, `next`, `previous`,
+        `seek`, `seekid`, `seekcur`, `setvol`, `volume`, `getvol`, `random`,
+        `repeat`, `single` (incl. oneshot), `consume`. `crossfade` / MixRamp
+        accepted and ignored (they would defeat gapless).
+  - [x] Outputs: `outputs`, `enableoutput`, `disableoutput`, `toggleoutput`.
+  - [x] Art: `albumart`, `readpicture` via `getCoverArt` (small in-memory
+        cache for chunked reads).
 - [ ] Player
-  - [ ] libmpv backend: load, gapless `current + next`, position/duration,
+  - [x] libmpv backend: load, gapless `current + next`, position/duration,
         end-of-track events, error handling.
-  - [ ] Sink enumeration and switching.
-  - [ ] ReplayGain mode from config.
-  - [ ] Volume: `setvol` / `volume` / `getvol` ↔ mpv `volume`.
+  - [x] Sink enumeration and switching.
+  - [x] ReplayGain via `replay_gain_mode` (persisted; no config option).
+  - [x] Volume: `setvol` / `volume` / `getvol` ↔ mpv `volume`.
+- [x] State file: queue, position, options, volume, output. Saved on
+      change (debounced) and on SIGTERM; restored paused at the saved
+      position.
+- [ ] Verify with mpd-mpris (Plasma widget, hotkey) and Cantata.
 
 ### Phase 2 — Cantata, playlists, favorites
 

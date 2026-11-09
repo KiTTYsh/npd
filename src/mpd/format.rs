@@ -2,6 +2,7 @@
 
 use std::fmt::Write;
 
+use super::Out;
 use crate::library::query::SongRow;
 use crate::library::tags;
 
@@ -37,7 +38,7 @@ fn timestamp(iso: &str) -> String {
     }
 }
 
-pub fn song(out: &mut String, song: &SongRow, mask: TagMask) {
+pub fn song(out: &mut Out, song: &SongRow, mask: TagMask) {
     let _ = writeln!(out, "file: {}", song.uri);
     if let Some(added) = &song.added {
         let _ = writeln!(out, "Last-Modified: {}", timestamp(added));
@@ -62,7 +63,7 @@ pub fn song(out: &mut String, song: &SongRow, mask: TagMask) {
     }
 }
 
-pub fn directory(out: &mut String, path: &str) {
+pub fn directory(out: &mut Out, path: &str) {
     let _ = writeln!(out, "directory: {path}");
 }
 
@@ -85,17 +86,17 @@ mod tests {
             tags: tags::encode(&[(tags::TITLE, "T".into()), (tags::ARTIST, "A".into()), (tags::COMMENT, "a\nb".into())]),
         };
         let mut mask = TagMask::all();
-        let mut out = String::new();
+        let mut out = Out::default();
         song(&mut out, &row, mask);
         assert_eq!(
-            out,
+            std::str::from_utf8(out.as_bytes()).unwrap(),
             "file: A/B/c.flac\nLast-Modified: 2024-05-01T10:20:30Z\nFormat: 44100:16:2\n\
              Artist: A\nTitle: T\nComment: a b\nTime: 61\nduration: 61.000\n"
         );
         mask.set(tags::ARTIST, false);
         out.clear();
         song(&mut out, &row, mask);
-        assert!(!out.contains("Artist"));
+        assert!(!std::str::from_utf8(out.as_bytes()).unwrap().contains("Artist"));
         assert!(TagMask::none().contains(tags::TITLE) == false);
     }
 }

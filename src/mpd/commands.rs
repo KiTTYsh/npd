@@ -7,16 +7,15 @@ use rusqlite::Connection;
 
 use super::format::{self, TagMask};
 use super::parse::{FilterArgs, filter_args, normalize_dir};
-use super::{Ack, AckCode, Ctx};
+use super::{Ack, AckCode, Ctx, Out};
 use crate::library::query::{self, Entry, Filter, Op, Query, SongRow, TagSel};
 use crate::library::tags;
 
 /// Commands npd implements, for `commands`.
 const COMMANDS: &[&str] = &[
-    "binarylimit", "close", "commands", "count", "currentsong", "decoders", "find", "idle",
-    "list", "listall", "listallinfo", "lsinfo", "noidle", "notcommands", "outputs", "password",
-    "ping", "playlistinfo", "rescan", "search", "searchcount", "stats", "status", "tagtypes",
-    "update", "urlhandlers",
+    "binarylimit", "close", "commands", "count", "decoders", "find", "idle", "list", "listall",
+    "listallinfo", "lsinfo", "noidle", "notcommands", "password", "ping", "rescan", "search",
+    "searchcount", "stats", "status", "tagtypes", "update", "urlhandlers",
 ];
 
 const DECODER_SUFFIXES: &[(&str, &str)] = &[
@@ -35,17 +34,19 @@ const DECODER_SUFFIXES: &[(&str, &str)] = &[
 
 /// Per-connection state.
 pub struct Session {
-    ctx: Arc<Ctx>,
-    tag_mask: TagMask,
+    pub(super) ctx: Arc<Ctx>,
+    pub(super) tag_mask: TagMask,
+    /// Largest binary chunk to send (`binarylimit`).
+    pub(super) binary_limit: usize,
 }
 
 impl Session {
     pub fn new(ctx: Arc<Ctx>) -> Self {
-        Self { ctx, tag_mask: TagMask::all() }
+        Self { ctx, tag_mask: TagMask::all(), binary_limit: 8192 }
     }
 
     /// Runs `f` against the library. An unsynced library behaves as empty.
-    async fn db<F, R>(&self, f: F) -> Result<R, Ack>
+    pub(super) async fn db<F, R>(&self, f: F) -> Result<R, Ack>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Default + Send + 'static,
@@ -53,11 +54,21 @@ impl Session {
         Ok(self.ctx.library.read(f).await?.unwrap_or_default())
     }
 
-    pub async fn exec(&mut self, name: &str, args: &[String], out: &mut String) -> Result<(), Ack> {
+    pub async fn exec(&mut self, name: &str, args: &[String], out: &mut Out) -> Result<(), Ack> {
         match name {
-            "ping" | "password" | "binarylimit" => Ok(()),
+            "ping" | "password" => Ok(()),
+            "binarylimit" => {
+                let limit = args
+                    .first()
+                    .and_then(|a| a.parse::<usize>().ok())
+                    .ok_or_else(|| Ack::arg("binarylimit expects a number"))?;
+                self.binary_limit = limit.max(64);
+                Ok(())
+            }
             "commands" => {
-                for c in COMMANDS {
+                let mut all: Vec<&str> = COMMANDS.iter().chain(super::playback::COMMANDS).copied().collect();
+                all.sort_unstable();
+                for c in all {
                     let _ = writeln!(out, "command: {c}");
                 }
                 Ok(())
@@ -77,12 +88,6 @@ impl Session {
             "config" | "kill" => Err(Ack::new(AckCode::Permission, "you don't have permission")),
 
             "stats" => self.stats(out).await,
-            "status" => {
-                self.status(out);
-                Ok(())
-            }
-            // Queue and player arrive with the playback engine.
-            "currentsong" | "playlistinfo" | "outputs" => Ok(()),
 
             "update" | "rescan" => {
                 let job = self.ctx.library.start_update();
@@ -99,18 +104,24 @@ impl Session {
             "searchcount" => self.count(args, out, true).await,
             "list" => self.list(args, out).await,
 
-            _ => Err(Ack::new(AckCode::Unknown, format!("unknown command \"{name}\""))),
+            _ => self.exec_playback(name, args, out).await,
         }
     }
 
-    fn tagtypes(&mut self, args: &[String], out: &mut String) -> Result<(), Ack> {
+    fn tagtypes(&mut self, args: &[String], out: &mut Out) -> Result<(), Ack> {
         let names = |args: &[String]| -> Result<Vec<&'static str>, Ack> {
             if args.is_empty() {
                 return Err(Ack::arg("not enough arguments"));
             }
-            args.iter()
-                .map(|a| tags::canonical(a).ok_or_else(|| Ack::arg(format!("unknown tag type: {a}"))))
-                .collect()
+            let mut out = Vec::new();
+            for a in args {
+                match tags::canonical(a) {
+                    Some(t) => out.push(t),
+                    None if tags::is_unsupported(a) => {}
+                    None => return Err(Ack::arg(format!("unknown tag type: {a}"))),
+                }
+            }
+            Ok(out)
         };
         match args.first().map(String::as_str) {
             None => {
@@ -132,7 +143,7 @@ impl Session {
         Ok(())
     }
 
-    async fn stats(&self, out: &mut String) -> Result<(), Ack> {
+    async fn stats(&self, out: &mut Out) -> Result<(), Ack> {
         let stats = self.ctx.library.stats().await?;
         let _ = write!(
             out,
@@ -147,17 +158,7 @@ impl Session {
         Ok(())
     }
 
-    fn status(&self, out: &mut String) {
-        out.push_str(
-            "volume: 100\nrepeat: 0\nrandom: 0\nsingle: 0\nconsume: 0\nplaylist: 1\n\
-             playlistlength: 0\nmixrampdb: 0\nstate: stop\n",
-        );
-        if let Some(job) = self.ctx.library.updating_job() {
-            let _ = writeln!(out, "updating_db: {job}");
-        }
-    }
-
-    async fn lsinfo(&self, args: &[String], out: &mut String) -> Result<(), Ack> {
+    async fn lsinfo(&self, args: &[String], out: &mut Out) -> Result<(), Ack> {
         let path = normalize_dir(args.first().map_or("", String::as_str));
         enum Found {
             Song(SongRow),
@@ -195,7 +196,7 @@ impl Session {
         Ok(())
     }
 
-    async fn listall(&self, args: &[String], out: &mut String, info: bool) -> Result<(), Ack> {
+    async fn listall(&self, args: &[String], out: &mut Out, info: bool) -> Result<(), Ack> {
         let path = normalize_dir(args.first().map_or("", String::as_str));
         let p = path.clone();
         let entries = self
@@ -224,7 +225,7 @@ impl Session {
         Ok(())
     }
 
-    async fn find(&self, args: &[String], out: &mut String, fold: bool) -> Result<(), Ack> {
+    async fn find(&self, args: &[String], out: &mut Out, fold: bool) -> Result<(), Ack> {
         let parsed = parse_filter(args, fold)?;
         if parsed.filter.is_none() {
             return Err(Ack::arg("incorrect arguments"));
@@ -237,7 +238,7 @@ impl Session {
         Ok(())
     }
 
-    async fn count(&self, args: &[String], out: &mut String, fold: bool) -> Result<(), Ack> {
+    async fn count(&self, args: &[String], out: &mut Out, fold: bool) -> Result<(), Ack> {
         let parsed = parse_filter(args, fold)?;
         if parsed.groups.len() > 1 {
             return Err(Ack::arg("only one group is supported"));
@@ -258,12 +259,16 @@ impl Session {
         Ok(())
     }
 
-    async fn list(&self, args: &[String], out: &mut String) -> Result<(), Ack> {
+    async fn list(&self, args: &[String], out: &mut Out) -> Result<(), Ack> {
         let Some(tag_name) = args.first() else {
             return Err(Ack::arg("too few arguments for \"list\""));
         };
         let Some(tag) = tags::canonical(tag_name) else {
-            return Err(Ack::arg(format!("unknown tag type: {tag_name}")));
+            return if tags::is_unsupported(tag_name) {
+                Ok(())
+            } else {
+                Err(Ack::arg(format!("unknown tag type: {tag_name}")))
+            };
         };
         let rest = &args[1..];
         // Legacy form: `list album ARTIST`.

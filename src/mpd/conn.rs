@@ -9,7 +9,7 @@ use tracing::{debug, info};
 
 use super::commands::Session;
 use super::parse::tokenize;
-use super::{Ack, AckCode, Ctx, PROTOCOL_VERSION};
+use super::{Ack, AckCode, Ctx, Out, PROTOCOL_VERSION};
 use crate::events::Subsystem;
 
 /// Longest request line accepted, to bound memory per client.
@@ -112,7 +112,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                         }
                     }
                 }
-                let mut out = String::new();
+                let mut out = Out::default();
                 for s in &fired {
                     pending.remove(s);
                     out.push_str(&format!("changed: {}\n", s.name()));
@@ -130,7 +130,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                         Read::Eof => return Ok(()),
                     }
                 }
-                let mut out = String::new();
+                let mut out = Out::default();
                 let mut failed = false;
                 for (index, l) in lines.iter().enumerate() {
                     debug!("> [{index}] {l}");
@@ -154,7 +154,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                 writer.write_all(out.as_bytes()).await?;
             }
             _ => {
-                let mut out = String::new();
+                let mut out = Out::default();
                 match run_one(&mut session, &name, &args, &mut out).await {
                     Ok(()) => out.push_str("OK\n"),
                     Err(ack) => {
@@ -168,7 +168,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
     }
 }
 
-async fn run_one(session: &mut Session, name: &str, args: &[String], out: &mut String) -> Result<(), Ack> {
+async fn run_one(session: &mut Session, name: &str, args: &[String], out: &mut Out) -> Result<(), Ack> {
     match name {
         "idle" | "noidle" | "close" | "command_list_begin" | "command_list_ok_begin" | "command_list_end" => {
             Err(Ack::new(AckCode::Arg, format!("{name} not allowed in command list")))

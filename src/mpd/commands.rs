@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::Connection;
 
+use super::channels::SubscribeError;
 use super::format::{self, TagMask};
 use super::parse::{FilterArgs, filter_args, normalize_dir};
 use super::{Ack, AckCode, Ctx, Out};
@@ -13,9 +15,10 @@ use crate::library::tags;
 
 /// Commands npd implements, for `commands`.
 const COMMANDS: &[&str] = &[
-    "binarylimit", "close", "commands", "count", "decoders", "find", "idle", "list", "listall",
-    "listallinfo", "lsinfo", "noidle", "notcommands", "password", "ping", "rescan", "search",
-    "searchcount", "stats", "status", "tagtypes", "update", "urlhandlers",
+    "binarylimit", "channels", "close", "commands", "count", "decoders", "find", "idle", "list",
+    "listall", "listallinfo", "listpartitions", "lsinfo", "noidle", "notcommands", "partition",
+    "password", "ping", "readmessages", "rescan", "search", "searchcount", "sendmessage", "stats",
+    "status", "subscribe", "tagtypes", "unsubscribe", "update", "urlhandlers",
 ];
 
 const DECODER_SUFFIXES: &[(&str, &str)] = &[
@@ -32,17 +35,28 @@ const DECODER_SUFFIXES: &[(&str, &str)] = &[
     ("dsf", "audio/x-dsf"),
 ];
 
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
 /// Per-connection state.
 pub struct Session {
     pub(super) ctx: Arc<Ctx>,
+    /// Identifies the client for channel subscriptions.
+    pub(super) id: u64,
     pub(super) tag_mask: TagMask,
     /// Largest binary chunk to send (`binarylimit`).
     pub(super) binary_limit: usize,
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.ctx.channels.remove_client(self.id, &self.ctx.events);
+    }
+}
+
 impl Session {
     pub fn new(ctx: Arc<Ctx>) -> Self {
-        Self { ctx, tag_mask: TagMask::all(), binary_limit: 8192 }
+        let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+        Self { ctx, id, tag_mask: TagMask::all(), binary_limit: 8192 }
     }
 
     /// Runs `f` against the library. An unsynced library behaves as empty.
@@ -88,6 +102,55 @@ impl Session {
             "config" | "kill" => Err(Ack::new(AckCode::Permission, "you don't have permission")),
 
             "stats" => self.stats(out).await,
+
+            // Partitions aren't supported; there is only the default one.
+            "listpartitions" => {
+                out.push_str("partition: default\n");
+                Ok(())
+            }
+            "partition" => match args.first().map(String::as_str) {
+                Some("default") => Ok(()),
+                Some(_) => Err(Ack::no_exist("partition does not exist")),
+                None => Err(Ack::arg("too few arguments")),
+            },
+
+            "subscribe" => {
+                let channel = args.first().ok_or_else(|| Ack::arg("too few arguments"))?;
+                self.ctx.channels.subscribe(self.id, channel, &self.ctx.events).map_err(|e| match e {
+                    SubscribeError::Invalid => Ack::arg("invalid channel name"),
+                    SubscribeError::Already => Ack::new(AckCode::Exist, "already subscribed to this channel"),
+                })
+            }
+            "unsubscribe" => {
+                let channel = args.first().ok_or_else(|| Ack::arg("too few arguments"))?;
+                if self.ctx.channels.unsubscribe(self.id, channel, &self.ctx.events) {
+                    Ok(())
+                } else {
+                    Err(Ack::no_exist("not subscribed to this channel"))
+                }
+            }
+            "channels" => {
+                for channel in self.ctx.channels.list() {
+                    let _ = writeln!(out, "channel: {channel}");
+                }
+                Ok(())
+            }
+            "readmessages" => {
+                for (channel, message) in self.ctx.channels.read(self.id) {
+                    let _ = write!(out, "channel: {channel}\nmessage: {message}\n");
+                }
+                Ok(())
+            }
+            "sendmessage" => {
+                let [channel, message] = args else {
+                    return Err(Ack::arg("wrong number of arguments"));
+                };
+                if self.ctx.channels.send(channel, message, &self.ctx.events) {
+                    Ok(())
+                } else {
+                    Err(Ack::no_exist("nobody is subscribed to this channel"))
+                }
+            }
 
             "update" | "rescan" => {
                 let job = self.ctx.library.start_update();

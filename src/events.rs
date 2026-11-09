@@ -13,10 +13,14 @@ pub enum Subsystem {
     Output,
     Options,
     Sticker,
+    /// Client-to-client channels were created or dropped.
+    Subscription,
+    /// A channel message arrived (reported only to clients with messages).
+    Message,
 }
 
 impl Subsystem {
-    pub const ALL: [Subsystem; 9] = [
+    pub const ALL: [Subsystem; 11] = [
         Self::Database,
         Self::Update,
         Self::StoredPlaylist,
@@ -26,6 +30,8 @@ impl Subsystem {
         Self::Output,
         Self::Options,
         Self::Sticker,
+        Self::Subscription,
+        Self::Message,
     ];
 
     pub fn name(self) -> &'static str {
@@ -39,6 +45,8 @@ impl Subsystem {
             Self::Output => "output",
             Self::Options => "options",
             Self::Sticker => "sticker",
+            Self::Subscription => "subscription",
+            Self::Message => "message",
         }
     }
 

@@ -176,8 +176,11 @@ Goal: hotkey and Plasma widget work against Navidrome.
       `rating` is the server's rating ×2 (0–10, as Cantata/myMPD use),
       read live; `favorite` is the star (`1`). Other names live in a local
       `stickers.db`, as MPD would keep them.
-- [ ] `tagtypes`, `decoders`, `commands`, `notcommands`, `urlhandlers` are
-      in; check the Cantata / mpd-mpris logs for anything else they probe.
+- [x] Connect-time probes: `tagtypes`, `decoders`, `commands`,
+      `notcommands`, `urlhandlers`, `listpartitions` (just `default`), and
+      client-to-client channels (`subscribe`, `unsubscribe`, `channels`,
+      `readmessages`, `sendmessage`, `subscription`/`message` idle).
+      Cantata browses with recursive `lsinfo` and reads `sticker … rating`.
 
 ### Phase 3 — Cache, local playback, scrobbling, handoff
 

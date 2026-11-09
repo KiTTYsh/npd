@@ -157,6 +157,7 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         playlists,
         stickers,
         art: mpd::ArtCache::default(),
+        channels: Default::default(),
         events,
         started: std::time::Instant::now(),
     });

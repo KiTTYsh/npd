@@ -110,7 +110,7 @@ async fn serve<R: AsyncRead + Unpin>(reader: R, ctx: Arc<Ctx>, tx: &mpsc::Sender
                         continue;
                     }
                 };
-                let mut fired: Vec<Subsystem> = pending.iter().copied().filter(|s| mask.contains(s)).collect();
+                let mut fired = fired_events(&session, &mut pending, &mask);
                 while fired.is_empty() {
                     tokio::select! {
                         event = events.recv() => {
@@ -122,7 +122,7 @@ async fn serve<R: AsyncRead + Unpin>(reader: R, ctx: Arc<Ctx>, tx: &mpsc::Sender
                             // Report events emitted together in one response.
                             tokio::task::yield_now().await;
                             drain(&mut events, &mut pending);
-                            fired = pending.iter().copied().filter(|s| mask.contains(s)).collect();
+                            fired = fired_events(&session, &mut pending, &mask);
                         }
                         read = conn.read_line() => {
                             match read? {
@@ -204,6 +204,15 @@ async fn run_one(session: &mut Session, name: &str, args: &[String], out: &mut O
             result
         }
     }
+}
+
+/// Pending events the client asked for. `message` only counts for clients
+/// with unread messages, since it is broadcast to everyone.
+fn fired_events(session: &Session, pending: &mut HashSet<Subsystem>, mask: &HashSet<Subsystem>) -> Vec<Subsystem> {
+    if pending.contains(&Subsystem::Message) && !session.ctx.channels.has_messages(session.id) {
+        pending.remove(&Subsystem::Message);
+    }
+    pending.iter().copied().filter(|s| mask.contains(s)).collect()
 }
 
 fn drain(events: &mut tokio::sync::broadcast::Receiver<Subsystem>, pending: &mut HashSet<Subsystem>) {

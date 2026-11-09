@@ -1,5 +1,6 @@
 //! MPD protocol server.
 
+mod channels;
 mod commands;
 mod conn;
 mod format;
@@ -123,6 +124,7 @@ pub struct Ctx {
     pub playlists: Arc<Playlists>,
     pub stickers: Stickers,
     pub art: ArtCache,
+    pub channels: channels::Channels,
     pub events: EventBus,
     pub started: Instant,
 }

@@ -13,6 +13,8 @@ favorites, and ratings live on the Navidrome server.
   (web UI, phone) show up in MPD clients.
 - **Gapless playback** (required).
 - **PipeWire sink selection** from MPD clients (required).
+- **Local playback** from a mounted copy of the library (CephFS at home),
+  with playback state still reported to Navidrome.
 - **Configurable cache:** stream only, prefetch N tracks ahead in the queue, or
   pin all favorites locally.
 
@@ -91,21 +93,26 @@ favorites, and ratings live on the Navidrome server.
 
 ### Phase 0 — Skeleton
 
-- [ ] Cargo project, config loading, logging (`tracing`).
-- [ ] Subsonic client: token+salt auth (API key if offered), `ping`,
-      `getOpenSubsonicExtensions`, error mapping.
-- [ ] systemd user unit.
+- [x] Cargo project, config loading, logging (`tracing`).
+- [x] Subsonic client: password, stored token+salt (`npd token`), or API key
+      auth; `ping`, `getOpenSubsonicExtensions`, error mapping.
+- [x] systemd user unit.
 
 ### Phase 1 — mpc and mpd-mpris
 
 Goal: hotkey and Plasma widget work against Navidrome.
 
 - [ ] Library mirror
-  - [ ] Full sync (paginated `search3` with empty query) into a staging
+  - [x] Full sync (paginated `search3` with empty query) into a staging
         copy, then atomic swap. Never blocks queries or playback.
+        (107k songs: ~13 s.)
   - [ ] Triggered by `update` / `rescan` (and on first start). Report
         `updating_db` in `status`; emit `update` + `database` idle events.
-  - [ ] Schema: songs, albums, artists, path ↔ ID, MBIDs, ReplayGain.
+        (Background job and events done; protocol side pending.)
+  - [x] Schema: songs, MPD tags, directories, path ↔ ID, MBIDs, ReplayGain.
+  - [ ] Shrink the tag table (integer tag IDs, index-organised table).
+  - [ ] Artist sort names and MusicBrainz IDs via `getArtists` (Navidrome
+        omits them from song entries).
   - [ ] Queue entries and stored playlists survive a swap (keyed by Subsonic
         ID; tracks removed from the server become unplayable, not dropped
         silently).
@@ -146,7 +153,15 @@ Goal: hotkey and Plasma widget work against Navidrome.
 - [ ] `tagtypes`, `decoders`, `commands`, `notcommands`, `urlhandlers`, and
       whatever else Cantata probes on connect.
 
-### Phase 3 — Cache, scrobbling, handoff
+### Phase 3 — Cache, local playback, scrobbling, handoff
+
+- [ ] Local playback: `[local] root = "/x/media/music"` in config. When set,
+      play `root/<uri>` instead of streaming; when unset, stream. A plain
+      switch, no detection of home vs. away. Fall back to streaming per
+      track only if the file is missing (renamed since the last sync).
+      Playback state (scrobbles, now playing, stars, play queue) still goes
+      to Navidrome, which keys it by song ID. Relies on "Report Real Path"
+      (URIs mirror the filesystem layout); local files are never cached.
 
 - [ ] Cache store keyed by `(song id, format, bitrate)`; size-capped LRU plus
       a pinned set.
@@ -189,11 +204,10 @@ see one flat MPD queue, so this needs no client changes:
 
 ## Open questions
 
-- **Full sync cost.** ~215 `search3` requests at 500/page for 107k tracks.
-  Measure wall time and server load; tune page size and concurrency.
 - **Which library commands Cantata uses on connect** (`listallinfo` vs.
   recursive `lsinfo`). Determine from protocol logs once Phase 1 is up;
   only parity matters, not Cantata's own UX.
-- **Path layout.** Check whether Navidrome's `path` values are unique and
-  stable across rescans, and fall back to synthetic `Artist/Album/NN Title`
-  paths if not.
+- **Path layout.** Settled: enable "Report Real Path" for the `npd [npd]`
+  player in Navidrome. npd strips the common mount prefix, so URIs match the
+  filesystem (and the old MPD library: 99.6% identical). Without it,
+  Navidrome's synthetic paths collide and npd disambiguates with the song ID.

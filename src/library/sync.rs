@@ -257,6 +257,7 @@ fn write_db(
             insert_dir.execute(params![dir, tags::parent_dir(dir)])?;
         }
 
+        tx.execute("INSERT INTO meta (key, value) VALUES ('root', ?1)", params![root])?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         tx.execute(
             "INSERT INTO meta (key, value) VALUES ('synced_at', ?1)",

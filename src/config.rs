@@ -11,6 +11,8 @@ pub struct Config {
     pub mpd: MpdConfig,
     #[serde(default)]
     pub paths: PathsConfig,
+    #[serde(default)]
+    pub playlists: PlaylistsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +56,25 @@ impl Default for MpdConfig {
 pub struct PathsConfig {
     /// Library mirror and other persistent state. Defaults to `$XDG_STATE_HOME/npd`.
     pub state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PlaylistsConfig {
+    /// Name of the virtual playlist of starred songs; empty disables it.
+    pub favorites: String,
+    /// Seconds between checks for playlist and star changes made elsewhere;
+    /// 0 disables polling.
+    pub poll_interval: u64,
+}
+
+impl Default for PlaylistsConfig {
+    fn default() -> Self {
+        Self {
+            favorites: "Favorites".into(),
+            poll_interval: 120,
+        }
+    }
 }
 
 pub enum Credentials {
@@ -159,6 +180,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.mpd.bind, ["127.0.0.1:6600"]);
+        assert_eq!(cfg.playlists.favorites, "Favorites");
         assert!(matches!(
             cfg.server.credentials().unwrap(),
             Credentials::Password { .. }

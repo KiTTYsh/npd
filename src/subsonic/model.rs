@@ -134,6 +134,20 @@ pub struct Album {
     pub is_compilation: Option<bool>,
 }
 
+/// A stored playlist. `entry` is only filled by `getPlaylist`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Playlist {
+    pub id: String,
+    pub name: String,
+    pub owner: Option<String>,
+    pub song_count: u32,
+    pub changed: String,
+    /// Smart playlists and other users' playlists.
+    pub readonly: bool,
+    pub entry: Vec<Song>,
+}
+
 // Response bodies, keyed by their element name in the envelope.
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +202,32 @@ pub(super) struct AlbumList2Body {
 #[serde(default)]
 pub(super) struct AlbumList2 {
     pub album: Vec<Album>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PlaylistsBody {
+    pub playlists: Playlists,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct Playlists {
+    pub playlist: Vec<Playlist>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PlaylistBody {
+    pub playlist: Playlist,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct Starred2Body {
+    pub starred2: SearchResult3,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct SongBody {
+    pub song: Song,
 }
 
 #[cfg(test)]

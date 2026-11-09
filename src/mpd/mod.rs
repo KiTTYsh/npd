@@ -5,6 +5,7 @@ mod conn;
 mod format;
 mod parse;
 mod playback;
+mod stored;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -13,12 +14,15 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::net::{TcpListener, UnixListener};
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use crate::config::MpdConfig;
 use crate::events::EventBus;
 use crate::library::Library;
 use crate::player::Player;
+use crate::playlists::Playlists;
+use crate::stickers::Stickers;
 use crate::subsonic::Client;
 
 /// Recently fetched cover art. Clients read art in chunks (`albumart URI
@@ -51,26 +55,56 @@ pub const PROTOCOL_VERSION: &str = "0.23.0";
 
 /// A response being built: text lines plus optional binary chunks.
 #[derive(Default)]
-pub struct Out(Vec<u8>);
+pub struct Out {
+    buf: Vec<u8>,
+    /// The connection's writer, for flushing long responses early.
+    sink: Option<mpsc::Sender<Vec<u8>>>,
+}
 
 impl Out {
+    /// Flush threshold for `flush_large`.
+    const CHUNK: usize = 64 * 1024;
+
+    pub fn new(sink: mpsc::Sender<Vec<u8>>) -> Self {
+        Self { buf: Vec::new(), sink: Some(sink) }
+    }
+
     pub fn push_str(&mut self, s: &str) {
-        self.0.extend_from_slice(s.as_bytes());
+        self.buf.extend_from_slice(s.as_bytes());
     }
 
     /// `binary: N`, the bytes, and a newline.
     pub fn binary(&mut self, data: &[u8]) {
         self.push_str(&format!("binary: {}\n", data.len()));
-        self.0.extend_from_slice(data);
-        self.0.push(b'\n');
+        self.buf.extend_from_slice(data);
+        self.buf.push(b'\n');
+    }
+
+    pub fn push_bytes(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
     }
 
     pub fn clear(&mut self) {
-        self.0.clear();
+        self.buf.clear();
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        &self.0
+        &self.buf
+    }
+
+    pub fn take(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.buf)
+    }
+
+    /// Sends the buffered output if it has grown large, so huge listings
+    /// are never held in memory whole. Fails if the client went away.
+    pub async fn flush_large(&mut self) -> Result<(), Ack> {
+        if self.buf.len() < Self::CHUNK {
+            return Ok(());
+        }
+        let Some(sink) = &self.sink else { return Ok(()) };
+        let chunk = std::mem::take(&mut self.buf);
+        sink.send(chunk).await.map_err(|_| Ack::system("client disconnected"))
     }
 }
 
@@ -86,6 +120,8 @@ pub struct Ctx {
     pub library: Arc<Library>,
     pub player: Arc<Player>,
     pub client: Arc<Client>,
+    pub playlists: Arc<Playlists>,
+    pub stickers: Stickers,
     pub art: ArtCache,
     pub events: EventBus,
     pub started: Instant,
@@ -99,6 +135,7 @@ pub enum AckCode {
     Permission = 4,
     Unknown = 5,
     NoExist = 50,
+    Exist = 56,
     System = 52,
 }
 

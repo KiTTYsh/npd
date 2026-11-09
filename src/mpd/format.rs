@@ -31,7 +31,7 @@ impl TagMask {
 
 /// `Last-Modified` wants `YYYY-MM-DDTHH:MM:SSZ`; Navidrome sends fractional
 /// seconds.
-fn timestamp(iso: &str) -> String {
+pub fn timestamp(iso: &str) -> String {
     match iso.get(..19) {
         Some(prefix) if iso.len() > 19 => format!("{prefix}Z"),
         _ => iso.to_owned(),

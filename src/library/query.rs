@@ -7,6 +7,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row, params_from_iter};
 
 use super::tags;
+use crate::subsonic::model::Song;
 
 /// Which tag(s) a condition looks at.
 #[derive(Debug, Clone, PartialEq)]
@@ -389,14 +390,10 @@ pub enum Entry {
 }
 
 /// Everything under `dir`, depth first: each directory followed by its
-/// contents, as MPD's `listall` orders it.
-pub fn walk(conn: &Connection, dir: &str) -> rusqlite::Result<Vec<Entry>> {
-    let base = Filter::Base(dir.to_owned());
-    let mut songs_by_dir: BTreeMap<String, Vec<SongRow>> = BTreeMap::new();
-    for song in find(conn, &Query { filter: Some(base), ..Default::default() })? {
-        let parent = tags::parent_dir(&song.uri).to_owned();
-        songs_by_dir.entry(parent).or_default().push(song);
-    }
+/// songs, then its subdirectories, as MPD's `listall` orders it. Calls `f`
+/// per entry so huge listings need not fit in memory; `f` returns false to
+/// stop early.
+pub fn walk(conn: &Connection, dir: &str, mut f: impl FnMut(Entry) -> bool) -> rusqlite::Result<()> {
     let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
     {
         let mut stmt = conn.prepare(
@@ -410,20 +407,92 @@ pub fn walk(conn: &Connection, dir: &str) -> rusqlite::Result<Vec<Entry>> {
         }
     }
 
-    let mut out = Vec::new();
+    let mut songs = conn.prepare(&format!("SELECT {SONG_COLUMNS} FROM songs s WHERE s.dir = ? ORDER BY s.uri"))?;
     let mut stack = vec![dir.to_owned()];
     while let Some(d) = stack.pop() {
-        if d != dir {
-            out.push(Entry::Dir(d.clone()));
+        if d != dir && !f(Entry::Dir(d.clone())) {
+            return Ok(());
         }
-        if let Some(songs) = songs_by_dir.remove(&d) {
-            out.extend(songs.into_iter().map(Entry::Song));
+        for song in songs.query_map([&d], song_row)? {
+            if !f(Entry::Song(song?)) {
+                return Ok(());
+            }
         }
         if let Some(kids) = children.remove(&d) {
             stack.extend(kids.into_iter().rev());
         }
     }
-    Ok(out)
+    Ok(())
+}
+
+/// `(uri, id, rating)` of rated songs under `dir`, as of the last sync.
+pub fn rated(conn: &Connection, dir: &str) -> rusqlite::Result<Vec<(String, String, u8)>> {
+    let mut stmt = conn.prepare(
+        "SELECT uri, id, rating FROM songs
+         WHERE rating > 0 AND (?1 = '' OR instr(uri, ?1 || '/') = 1)
+         ORDER BY uri",
+    )?;
+    let rows = stmt.query_map([dir], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    rows.collect()
+}
+
+pub fn song_by_id(conn: &Connection, id: &str) -> rusqlite::Result<Option<SongRow>> {
+    conn.query_row(&format!("SELECT {SONG_COLUMNS} FROM songs s WHERE s.id = ?"), [id], song_row)
+        .optional()
+}
+
+/// The directory prefix the last sync stripped from server paths.
+pub fn root(conn: &Connection) -> rusqlite::Result<String> {
+    Ok(conn
+        .query_row("SELECT value FROM meta WHERE key = 'root'", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default())
+}
+
+/// Rows for songs the server returned (playlist entries, favorites): from
+/// the mirror where present, otherwise built from the server's data, so
+/// songs added since the last sync still show up and play.
+pub fn resolve(conn: Option<&Connection>, songs: &[Song]) -> rusqlite::Result<Vec<SongRow>> {
+    let root = match conn {
+        Some(conn) => root(conn)?,
+        None => String::new(),
+    };
+    let mut stmt = match conn {
+        Some(conn) => Some(conn.prepare(&format!("SELECT {SONG_COLUMNS} FROM songs s WHERE s.id = ?"))?),
+        None => None,
+    };
+    let mut rows = Vec::with_capacity(songs.len());
+    for song in songs {
+        let row = match stmt.as_mut() {
+            Some(stmt) => stmt.query_row([&song.id], song_row).optional()?,
+            None => None,
+        };
+        rows.push(row.unwrap_or_else(|| SongRow::from_song(song, &root)));
+    }
+    Ok(rows)
+}
+
+impl SongRow {
+    /// A row for a song the mirror doesn't have.
+    pub fn from_song(song: &Song, root: &str) -> Self {
+        let uri = tags::song_uri(song);
+        let uri = match uri.strip_prefix(root).and_then(|u| u.strip_prefix('/')) {
+            Some(rest) if !root.is_empty() => rest.to_owned(),
+            _ => uri,
+        };
+        Self {
+            rowid: 0,
+            id: song.id.clone(),
+            uri,
+            duration: song.duration,
+            sample_rate: song.sampling_rate,
+            bit_depth: song.bit_depth,
+            channels: song.channel_count,
+            added: song.created.clone(),
+            cover_art: song.cover_art.clone(),
+            tags: tags::encode(&tags::song_tags(song, None)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -555,8 +624,13 @@ mod tests {
         assert_eq!(uris(songs), ["B/1.mp3"]);
         assert!(dir_exists(&conn, "A/X").unwrap());
         assert!(!dir_exists(&conn, "A/Z").unwrap());
-        let walked: Vec<String> = walk(&conn, "")
-            .unwrap()
+        let mut entries = Vec::new();
+        walk(&conn, "", |e| {
+            entries.push(e);
+            true
+        })
+        .unwrap();
+        let walked: Vec<String> = entries
             .into_iter()
             .map(|e| match e {
                 Entry::Dir(d) => format!("d:{d}"),

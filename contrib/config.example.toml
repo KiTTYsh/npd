@@ -16,3 +16,7 @@ bind = ["127.0.0.1:6600"]
 
 [paths]
 # state_dir = "/home/me/.local/state/npd"   # library mirror; default $XDG_STATE_HOME/npd
+
+[playlists]
+# favorites = "Favorites"   # virtual playlist of starred songs; "" disables
+# poll_interval = 120       # seconds between checks for changes made elsewhere; 0 disables

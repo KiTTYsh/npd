@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use super::commands::Session;
@@ -15,7 +16,7 @@ use crate::events::Subsystem;
 /// Longest request line accepted, to bound memory per client.
 const MAX_LINE: usize = 1 << 20;
 
-pub async fn handle<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>, peer: String) {
+pub async fn handle<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream: S, ctx: Arc<Ctx>, peer: String) {
     debug!("{peer}: connected");
     if let Err(e) = run(stream, ctx).await {
         debug!("{peer}: {e}");
@@ -56,21 +57,41 @@ impl<R: AsyncRead + Unpin> Conn<R> {
     }
 }
 
-async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std::io::Result<()> {
+async fn run<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream: S, ctx: Arc<Ctx>) -> std::io::Result<()> {
     let (reader, mut writer) = tokio::io::split(stream);
+    // Responses go through a writer task so long ones can be sent in pieces
+    // while the command is still producing them.
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(4);
+    let writer_task = tokio::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            writer.write_all(&chunk).await?;
+        }
+        writer.flush().await
+    });
+    let result = serve(reader, ctx, &tx).await;
+    drop(tx);
+    let written = writer_task.await.unwrap_or_else(|e| Err(std::io::Error::other(e)));
+    result.and(written)
+}
+
+async fn send(tx: &mpsc::Sender<Vec<u8>>, data: Vec<u8>) -> std::io::Result<()> {
+    tx.send(data).await.map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+}
+
+async fn serve<R: AsyncRead + Unpin>(reader: R, ctx: Arc<Ctx>, tx: &mpsc::Sender<Vec<u8>>) -> std::io::Result<()> {
     let mut conn = Conn { reader: BufReader::new(reader), buf: Vec::new() };
     let mut events = ctx.events.subscribe();
     let mut pending: HashSet<Subsystem> = HashSet::new();
     let mut session = Session::new(ctx);
 
-    writer.write_all(format!("OK MPD {PROTOCOL_VERSION}\n").as_bytes()).await?;
+    send(tx, format!("OK MPD {PROTOCOL_VERSION}\n").into_bytes()).await?;
 
     loop {
         let Read::Line(line) = conn.read_line().await? else { return Ok(()) };
         let (name, args) = match tokenize(&line) {
             Ok(parsed) => parsed,
             Err(e) => {
-                writer.write_all(Ack::arg(e).render(0, "").as_bytes()).await?;
+                send(tx, Ack::arg(e).render(0, "").into_bytes()).await?;
                 continue;
             }
         };
@@ -85,7 +106,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                 let mask = match idle_mask(&args) {
                     Ok(mask) => mask,
                     Err(ack) => {
-                        writer.write_all(ack.render(0, "idle").as_bytes()).await?;
+                        send(tx, ack.render(0, "idle").into_bytes()).await?;
                         continue;
                     }
                 };
@@ -112,13 +133,13 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                         }
                     }
                 }
-                let mut out = Out::default();
+                let mut out = Out::new(tx.clone());
                 for s in &fired {
                     pending.remove(s);
                     out.push_str(&format!("changed: {}\n", s.name()));
                 }
                 out.push_str("OK\n");
-                writer.write_all(out.as_bytes()).await?;
+                send(tx, out.take()).await?;
             }
             "command_list_begin" | "command_list_ok_begin" => {
                 let list_ok = name == "command_list_ok_begin";
@@ -130,7 +151,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                         Read::Eof => return Ok(()),
                     }
                 }
-                let mut out = Out::default();
+                let mut out = Out::new(tx.clone());
                 let mut failed = false;
                 for (index, l) in lines.iter().enumerate() {
                     debug!("> [{index}] {l}");
@@ -151,10 +172,10 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                 if !failed {
                     out.push_str("OK\n");
                 }
-                writer.write_all(out.as_bytes()).await?;
+                send(tx, out.take()).await?;
             }
             _ => {
-                let mut out = Out::default();
+                let mut out = Out::new(tx.clone());
                 match run_one(&mut session, &name, &args, &mut out).await {
                     Ok(()) => out.push_str("OK\n"),
                     Err(ack) => {
@@ -162,7 +183,7 @@ async fn run<S: AsyncRead + AsyncWrite + Unpin>(stream: S, ctx: Arc<Ctx>) -> std
                         out.push_str(&ack.render(0, &name));
                     }
                 }
-                writer.write_all(out.as_bytes()).await?;
+                send(tx, out.take()).await?;
             }
         }
     }

@@ -33,6 +33,29 @@ pub fn new_token(password: &str) -> (String, String) {
     (token, salt)
 }
 
+/// The `subsonic-response` object, or the API error it carries.
+fn unwrap_envelope(mut body: Value) -> Result<Value> {
+    let inner = body
+        .get_mut("subsonic-response")
+        .map(Value::take)
+        .ok_or_else(|| Error::Decode("missing subsonic-response".into()))?;
+    if inner.get("status").and_then(Value::as_str) != Some("ok") {
+        let err = inner.get("error");
+        return Err(Error::Api {
+            code: err
+                .and_then(|e| e.get("code"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32,
+            message: err
+                .and_then(|e| e.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+                .to_owned(),
+        });
+    }
+    Ok(inner)
+}
+
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -91,26 +114,17 @@ impl Client {
             .send()
             .await?
             .error_for_status()?;
-        let mut body: Value = resp.json().await?;
-        let inner = body
-            .get_mut("subsonic-response")
-            .map(Value::take)
-            .ok_or_else(|| Error::Decode("missing subsonic-response".into()))?;
-        if inner.get("status").and_then(Value::as_str) != Some("ok") {
-            let err = inner.get("error");
-            return Err(Error::Api {
-                code: err
-                    .and_then(|e| e.get("code"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
-                message: err
-                    .and_then(|e| e.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error")
-                    .to_owned(),
-            });
-        }
-        Ok(inner)
+        unwrap_envelope(resp.json().await?)
+    }
+
+    /// Like `call`, but sends parameters as a form body (the `formPost`
+    /// extension), for writes whose song lists would overflow a URL.
+    async fn post(&self, endpoint: &str, params: &[(&str, String)]) -> Result<Value> {
+        let url = format!("{}/rest/{endpoint}", self.base_url);
+        let mut form = self.auth_params();
+        form.extend(params.iter().map(|(k, v)| (*k, v.clone())));
+        let resp = self.http.post(&url).form(&form).send().await?.error_for_status()?;
+        unwrap_envelope(resp.json().await?)
     }
 
     async fn get<T: DeserializeOwned>(&self, endpoint: &str, params: &[(&str, String)]) -> Result<T> {
@@ -192,6 +206,75 @@ impl Client {
     pub async fn artists(&self) -> Result<Vec<ArtistRef>> {
         let body: ArtistsBody = self.get("getArtists", &[]).await?;
         Ok(body.artists.index.into_iter().flat_map(|i| i.artist).collect())
+    }
+
+    pub async fn song(&self, id: &str) -> Result<Song> {
+        let body: SongBody = self.get("getSong", &[("id", id.to_owned())]).await?;
+        Ok(body.song)
+    }
+
+    /// The user's playlists, without entries.
+    pub async fn playlists(&self) -> Result<Vec<Playlist>> {
+        let body: PlaylistsBody = self.get("getPlaylists", &[]).await?;
+        Ok(body.playlists.playlist)
+    }
+
+    /// A playlist with its entries.
+    pub async fn playlist(&self, id: &str) -> Result<Playlist> {
+        let body: PlaylistBody = self.get("getPlaylist", &[("id", id.to_owned())]).await?;
+        Ok(body.playlist)
+    }
+
+    /// Creates a playlist, or with `replace` set to a playlist ID, replaces
+    /// that playlist's songs.
+    pub async fn create_playlist(&self, name: Option<&str>, replace: Option<&str>, song_ids: &[String]) -> Result<()> {
+        let mut params: Vec<(&str, String)> = Vec::new();
+        if let Some(name) = name {
+            params.push(("name", name.to_owned()));
+        }
+        if let Some(id) = replace {
+            params.push(("playlistId", id.to_owned()));
+        }
+        params.extend(song_ids.iter().map(|id| ("songId", id.clone())));
+        self.post("createPlaylist", &params).await.map(drop)
+    }
+
+    /// Renames a playlist, appends songs, and removes songs by position
+    /// (positions refer to the playlist before the call).
+    pub async fn update_playlist(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        add: &[String],
+        remove: &[usize],
+    ) -> Result<()> {
+        let mut params = vec![("playlistId", id.to_owned())];
+        if let Some(name) = name {
+            params.push(("name", name.to_owned()));
+        }
+        params.extend(add.iter().map(|id| ("songIdToAdd", id.clone())));
+        params.extend(remove.iter().map(|i| ("songIndexToRemove", i.to_string())));
+        self.post("updatePlaylist", &params).await.map(drop)
+    }
+
+    pub async fn delete_playlist(&self, id: &str) -> Result<()> {
+        self.post("deletePlaylist", &[("id", id.to_owned())]).await.map(drop)
+    }
+
+    /// Starred songs, most recently starred first.
+    pub async fn starred_songs(&self) -> Result<Vec<Song>> {
+        let body: Starred2Body = self.get("getStarred2", &[]).await?;
+        Ok(body.starred2.song)
+    }
+
+    pub async fn star(&self, song_ids: &[String], on: bool) -> Result<()> {
+        let params: Vec<_> = song_ids.iter().map(|id| ("id", id.clone())).collect();
+        self.post(if on { "star" } else { "unstar" }, &params).await.map(drop)
+    }
+
+    /// Sets a 1–5 rating; 0 removes it.
+    pub async fn set_rating(&self, id: &str, rating: u8) -> Result<()> {
+        self.post("setRating", &[("id", id.to_owned()), ("rating", rating.to_string())]).await.map(drop)
     }
 
     /// One page of all albums, alphabetically.

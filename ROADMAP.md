@@ -151,19 +151,33 @@ Goal: hotkey and Plasma widget work against Navidrome.
 
 ### Phase 2 — Cantata, playlists, favorites
 
-- [ ] `listallinfo` streamed from SQLite (107k tracks is tens of MB; must not
-      buffer the whole response).
-- [ ] `plchanges` / `plchangesposid` (queue versioning).
-- [ ] Stored playlists, write-through: `listplaylists`, `listplaylist`,
-      `listplaylistinfo`, `load`, `save`, `playlistadd`, `playlistdelete`,
-      `playlistmove`, `playlistclear`, `rename`, `rm`.
-      `playlistmove` rewrites the whole list (`updatePlaylist` has no move).
-      Smart playlists are read-only (`ACK` permission error).
-- [ ] Poll Navidrome for playlist/star changes; emit `stored_playlist` idle.
-- [ ] Virtual `Favorites` playlist.
-- [ ] Stickers: `sticker get/set/delete/list/find` for `rating`, `favorite`.
-- [ ] `tagtypes`, `decoders`, `commands`, `notcommands`, `urlhandlers`, and
-      whatever else Cantata probes on connect.
+- [x] `listallinfo` streamed from SQLite (107k tracks is ~70 MB; sent in
+      chunks from a walk on its own connection, never buffered whole).
+- [x] `plchanges` / `plchangesposid` (queue versioning).
+- [x] Stored playlists, write-through: `listplaylists`, `listplaylist`,
+      `listplaylistinfo`, `load`, `save` (create/append/replace),
+      `playlistadd`, `playlistdelete`, `playlistmove`, `playlistclear`,
+      `rename`, `rm`; root `lsinfo` lists them too (`mpc lsplaylists`).
+      Inserts and moves rewrite the whole list (`updatePlaylist` only
+      appends and removes); clearing removes every index (an empty
+      `createPlaylist` is a no-op on Navidrome). Smart and other users'
+      playlists are read-only (`ACK` permission error). Duplicate server
+      names get a ` (2)` suffix. Entries missing from the mirror (added
+      since the last sync) are built from the server's data, so they still
+      list and play.
+- [x] Poll Navidrome for playlist/star changes (`[playlists] poll_interval`,
+      default 120 s, and after every write); emit `stored_playlist` /
+      `sticker` idle.
+- [x] Virtual `Favorites` playlist (`[playlists] favorites`): starred songs,
+      newest first. `playlistadd` stars, `playlistdelete` unstars; other
+      edits are refused. Already-starred songs are never re-starred, since
+      that resets their date and reorders the list.
+- [x] Stickers: `sticker get/set/delete/list/find` (with `=`/`<`/`>`).
+      `rating` is the server's rating ×2 (0–10, as Cantata/myMPD use),
+      read live; `favorite` is the star (`1`). Other names live in a local
+      `stickers.db`, as MPD would keep them.
+- [ ] `tagtypes`, `decoders`, `commands`, `notcommands`, `urlhandlers` are
+      in; check the Cantata / mpd-mpris logs for anything else they probe.
 
 ### Phase 3 — Cache, local playback, scrobbling, handoff
 

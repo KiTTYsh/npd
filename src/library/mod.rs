@@ -17,8 +17,11 @@ use tracing::{error, info};
 
 use crate::events::{EventBus, Subsystem};
 use crate::subsonic::Client;
+use crate::subsonic::model::Song;
+use query::SongRow;
 
 struct Snapshot {
+    path: PathBuf,
     conn: Mutex<Connection>,
 }
 
@@ -139,6 +142,38 @@ impl Library {
         .context("library query")
     }
 
+    /// Like `read`, but on a connection of its own, for long reads (whole
+    /// library listings) that shouldn't hold up other queries.
+    pub async fn read_long<F, R>(&self, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let Some(snapshot) = self.snapshot.read().unwrap().clone() else {
+            return Ok(None);
+        };
+        tokio::task::spawn_blocking(move || {
+            let conn = open_snapshot(&snapshot.path).map_err(|e| {
+                rusqlite::Error::InvalidPath(format!("{e:#}").into())
+            })?;
+            let conn = conn.conn.into_inner().unwrap();
+            f(&conn)
+        })
+        .await
+        .context("library query panicked")?
+        .map(Some)
+        .context("library query")
+    }
+
+    /// Rows for songs the server returned; see `query::resolve`.
+    pub async fn resolve(&self, songs: Arc<Vec<Song>>) -> Result<Vec<SongRow>> {
+        let s = Arc::clone(&songs);
+        match self.read(move |conn| query::resolve(Some(conn), &s)).await? {
+            Some(rows) => Ok(rows),
+            None => Ok(query::resolve(None, &songs)?),
+        }
+    }
+
     pub async fn stats(&self) -> Result<Stats> {
         let stats = self
             .read(|conn| {
@@ -176,6 +211,7 @@ fn open_snapshot(path: &Path) -> Result<Snapshot> {
     .with_context(|| format!("opening {}", path.display()))?;
     query::register_functions(&conn)?;
     Ok(Snapshot {
+        path: path.to_owned(),
         conn: Mutex::new(conn),
     })
 }

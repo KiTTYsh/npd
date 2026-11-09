@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::commands::Session;
 use super::format;
 use super::parse::{filter_args, normalize_dir, range};
-use super::{Ack, AckCode, Out};
+use super::{Ack, Out};
 use crate::library::query::{self, Op, Query};
 use crate::player::{self, State};
 use crate::queue::{Item, Single};
@@ -16,7 +16,7 @@ use crate::queue::{Item, Single};
 /// Commands implemented here, for `commands`.
 pub const COMMANDS: &[&str] = &[
     "add", "addid", "albumart", "clear", "consume", "crossfade", "currentsong", "delete",
-    "deleteid", "disableoutput", "enableoutput", "findadd", "getvol", "listplaylists", "move",
+    "deleteid", "disableoutput", "enableoutput", "findadd", "getvol", "move",
     "moveid", "next", "outputs", "pause", "play", "playid", "playlistid", "playlistinfo",
     "plchanges", "plchangesposid", "previous", "random", "readpicture", "repeat",
     "replay_gain_mode", "replay_gain_status", "searchadd", "seek", "seekcur", "seekid", "setvol",
@@ -33,11 +33,11 @@ impl From<player::Error> for Ack {
     }
 }
 
-fn arg<'a>(args: &'a [String], i: usize) -> Result<&'a str, Ack> {
+pub(super) fn arg<'a>(args: &'a [String], i: usize) -> Result<&'a str, Ack> {
     args.get(i).map(String::as_str).ok_or_else(|| Ack::arg("too few arguments"))
 }
 
-fn parse<T: FromStr>(args: &[String], i: usize) -> Result<T, Ack> {
+pub(super) fn parse<T: FromStr>(args: &[String], i: usize) -> Result<T, Ack> {
     let a = arg(args, i)?;
     a.parse().map_err(|_| Ack::arg(format!("Invalid argument: {a}")))
 }
@@ -51,7 +51,7 @@ fn flag(args: &[String]) -> Result<bool, Ack> {
 }
 
 /// A position range argument, clamped to `len` when open-ended.
-fn pos_range(arg: &str, len: usize) -> Result<Range<usize>, Ack> {
+pub(super) fn pos_range(arg: &str, len: usize) -> Result<Range<usize>, Ack> {
     let (start, end) = range(arg).map_err(Ack::arg)?;
     Ok(start..end.min(len))
 }
@@ -269,10 +269,7 @@ impl Session {
             "albumart" => self.art(args, out, false).await,
             "readpicture" => self.art(args, out, true).await,
 
-            // Stored playlists arrive in phase 2.
-            "listplaylists" => Ok(()),
-
-            _ => Err(Ack::new(AckCode::Unknown, format!("unknown command \"{name}\""))),
+            _ => self.exec_stored(name, args, out).await,
         }
     }
 

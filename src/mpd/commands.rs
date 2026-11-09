@@ -66,7 +66,7 @@ impl Session {
                 Ok(())
             }
             "commands" => {
-                let mut all: Vec<&str> = COMMANDS.iter().chain(super::playback::COMMANDS).copied().collect();
+                let mut all: Vec<&str> = COMMANDS.iter().chain(super::playback::COMMANDS).chain(super::stored::COMMANDS).copied().collect();
                 all.sort_unstable();
                 for c in all {
                     let _ = writeln!(out, "command: {c}");
@@ -189,40 +189,60 @@ impl Session {
                 for s in songs {
                     format::song(out, &s, self.tag_mask);
                 }
+                if path.is_empty() {
+                    self.list_playlists(out).await?;
+                }
             }
-            None if path.is_empty() => {}
+            None if path.is_empty() => self.list_playlists(out).await?,
             None | Some(Found::Missing) => return Err(Ack::no_exist("No such directory")),
         }
         Ok(())
     }
 
+    /// Streams the listing: a blocking thread walks the library and hands
+    /// over chunks, which go to the client as they come.
     async fn listall(&self, args: &[String], out: &mut Out, info: bool) -> Result<(), Ack> {
         let path = normalize_dir(args.first().map_or("", String::as_str));
+        let mask = self.tag_mask;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(4);
         let p = path.clone();
-        let entries = self
-            .db(move |conn| {
-                if let Some(song) = query::song_by_uri(conn, &p)? {
-                    return Ok(Some(vec![Entry::Song(song)]));
-                }
-                if !query::dir_exists(conn, &p)? {
-                    return Ok(None);
-                }
-                query::walk(conn, &p).map(Some)
-            })
-            .await?;
-        let Some(entries) = entries else {
-            return if path.is_empty() { Ok(()) } else { Err(Ack::no_exist("No such directory")) };
-        };
-        for entry in entries {
-            match entry {
-                Entry::Dir(d) => format::directory(out, &d),
-                Entry::Song(s) if info => format::song(out, &s, self.tag_mask),
-                Entry::Song(s) => {
-                    let _ = writeln!(out, "file: {}", s.uri);
-                }
+        let walk = self.ctx.library.read_long(move |conn| {
+            let mut chunk = Out::default();
+            let send = |chunk: &mut Out| tx.blocking_send(chunk.take()).is_ok();
+            if let Some(song) = query::song_by_uri(conn, &p)? {
+                format::song(&mut chunk, &song, mask);
+                send(&mut chunk);
+                return Ok(true);
             }
+            if !query::dir_exists(conn, &p)? {
+                return Ok(false);
+            }
+            query::walk(conn, &p, |entry| {
+                match entry {
+                    Entry::Dir(d) => format::directory(&mut chunk, &d),
+                    Entry::Song(s) if info => format::song(&mut chunk, &s, mask),
+                    Entry::Song(s) => {
+                        let _ = writeln!(chunk, "file: {}", s.uri);
+                    }
+                }
+                chunk.as_bytes().len() < 32 * 1024 || send(&mut chunk)
+            })?;
+            Ok(send(&mut chunk))
+        });
+        let forward = async {
+            while let Some(chunk) = rx.recv().await {
+                out.push_bytes(&chunk);
+                out.flush_large().await?;
+            }
+            Ok::<_, Ack>(())
+        };
+        let (found, forwarded) = tokio::join!(walk, forward);
+        forwarded?;
+        match found? {
+            Some(false) => Err(Ack::no_exist("No such directory")),
+            None if !path.is_empty() => Err(Ack::no_exist("No such directory")),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     async fn find(&self, args: &[String], out: &mut Out, fold: bool) -> Result<(), Ack> {

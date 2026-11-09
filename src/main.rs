@@ -3,8 +3,10 @@ mod events;
 mod library;
 mod mpd;
 mod player;
+mod playlists;
 mod queue;
 mod state;
+mod stickers;
 mod subsonic;
 
 use std::io::IsTerminal;
@@ -18,6 +20,8 @@ use tracing::{info, warn};
 use config::Config;
 use events::EventBus;
 use library::Library;
+use playlists::Playlists;
+use stickers::Stickers;
 
 #[derive(Parser)]
 #[command(version, about = "MPD-compatible daemon backed by Navidrome / OpenSubsonic")]
@@ -142,10 +146,16 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
     }
     state::spawn_saver(Arc::clone(&player), &events, state_path.clone());
 
+    let playlists = Playlists::new(Arc::clone(&client), events.clone(), &config.playlists.favorites);
+    playlists.start_polling(std::time::Duration::from_secs(config.playlists.poll_interval));
+    let stickers = Stickers::open(&state_dir)?;
+
     let ctx = Arc::new(mpd::Ctx {
         library,
         player: Arc::clone(&player),
         client,
+        playlists,
+        stickers,
         art: mpd::ArtCache::default(),
         events,
         started: std::time::Instant::now(),

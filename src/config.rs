@@ -107,11 +107,14 @@ pub struct PlaybackConfig {
     /// Report plays to the server ("now playing", play counts, and any
     /// scrobbling the server forwards to Last.fm / ListenBrainz).
     pub scrobble: bool,
+    /// Share the play queue with other devices through the server: save it
+    /// on pause/stop, take over another device's on resume.
+    pub handoff: bool,
 }
 
 impl Default for PlaybackConfig {
     fn default() -> Self {
-        Self { local_root: None, scrobble: true }
+        Self { local_root: None, scrobble: true, handoff: false }
     }
 }
 

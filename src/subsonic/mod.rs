@@ -282,6 +282,21 @@ impl Client {
         self.call("scrobble", &params).await.map(drop)
     }
 
+    /// The saved play queue (empty if none).
+    pub async fn play_queue(&self) -> Result<PlayQueue> {
+        let body: PlayQueueBody = self.get("getPlayQueue", &[]).await?;
+        Ok(body.play_queue)
+    }
+
+    pub async fn save_play_queue(&self, ids: &[String], current: Option<&str>, position_ms: u64) -> Result<()> {
+        let mut params: Vec<(&str, String)> = ids.iter().map(|id| ("id", id.clone())).collect();
+        if let Some(c) = current {
+            params.push(("current", c.to_owned()));
+            params.push(("position", position_ms.to_string()));
+        }
+        self.post("savePlayQueue", &params).await.map(drop)
+    }
+
     /// Sets a 1–5 rating; 0 removes it.
     pub async fn set_rating(&self, id: &str, rating: u8) -> Result<()> {
         self.post("setRating", &[("id", id.to_owned()), ("rating", rating.to_string())]).await.map(drop)

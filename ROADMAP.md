@@ -202,8 +202,13 @@ Goal: hotkey and Plasma widget work against Navidrome.
       when a song starts playing, `true` after listening to half of it or
       4 min. Listening time is counted, not position, so seeking ahead
       doesn't scrobble; repeats of the same song count again.
-- [ ] Play queue handoff via `savePlayQueue` / `getPlayQueue` (resume at home
-      where you paused at work). Opt-in, on stop/pause and on startup.
+- [x] Play queue handoff (`[playback] handoff`, opt-in) via `savePlayQueue`
+      / `getPlayQueue`: saved on pause/stop and shutdown; on resume
+      (`play`/`pause 0`/toggle, not picking a song) and at startup, a queue
+      another device saved is taken over, paused at its position. Changes
+      are detected by fingerprint (songs, current, position) since
+      `changedBy` is just "npd" on every machine. First run only records
+      the server's queue, never replaces the local one.
 - [x] Cover art cache on disk (`[cache] art_size`, MiB, LRU by mtime),
       including "no art". `albumart` is keyed by album (MPD reads the folder
       image, so one fetch serves every track); `readpicture` by song.

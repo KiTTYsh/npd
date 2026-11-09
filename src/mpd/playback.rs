@@ -64,6 +64,19 @@ fn queue_item(out: &mut Out, pos: usize, item: &Item, session: &Session) {
 impl Session {
     pub(super) async fn exec_playback(&mut self, name: &str, args: &[String], out: &mut Out) -> Result<(), Ack> {
         let player = Arc::clone(&self.ctx.player);
+        // Resuming (not picking a song): first take over a queue another
+        // device left on the server.
+        let resume = match name {
+            "play" | "playid" => args.is_empty(),
+            "pause" => args.first().is_none_or(|a| a == "0"),
+            _ => false,
+        };
+        if resume
+            && player.state() != State::Play
+            && let Some(handoff) = &self.ctx.handoff
+        {
+            handoff.before_resume().await;
+        }
         match name {
             "status" => {
                 self.status(out);

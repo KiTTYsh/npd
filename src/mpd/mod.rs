@@ -22,6 +22,7 @@ use crate::config::MpdConfig;
 use crate::events::EventBus;
 use crate::library::Library;
 use crate::art::ArtStore;
+use crate::handoff::Handoff;
 use crate::player::Player;
 use crate::playlists::Playlists;
 use crate::stickers::Stickers;
@@ -100,6 +101,7 @@ pub struct Ctx {
     pub player: Arc<Player>,
     pub client: Arc<Client>,
     pub playlists: Arc<Playlists>,
+    pub handoff: Option<Arc<Handoff>>,
     pub stickers: Stickers,
     pub art: ArtStore,
     pub channels: channels::Channels,

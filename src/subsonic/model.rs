@@ -148,6 +148,18 @@ pub struct Playlist {
     pub entry: Vec<Song>,
 }
 
+/// The server-side play queue shared between a user's devices.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlayQueue {
+    pub entry: Vec<Song>,
+    /// Song ID.
+    pub current: Option<String>,
+    /// Milliseconds into the current song.
+    pub position: Option<u64>,
+    pub changed_by: Option<String>,
+}
+
 // Response bodies, keyed by their element name in the envelope.
 
 #[derive(Debug, Deserialize)]
@@ -223,6 +235,12 @@ pub(super) struct PlaylistBody {
 #[derive(Debug, Deserialize)]
 pub(super) struct Starred2Body {
     pub starred2: SearchResult3,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(super) struct PlayQueueBody {
+    pub play_queue: PlayQueue,
 }
 
 #[derive(Debug, Deserialize)]

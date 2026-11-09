@@ -29,6 +29,10 @@ bind = ["127.0.0.1:6600"]
 # missing locally still stream.
 # local_root = "/mnt/music"
 # scrobble = true            # report plays to the server
+# Share the play queue with other devices (phone apps, another npd) through
+# the server: saved on pause/stop, and another device's queue is taken
+# over when you resume here.
+# handoff = false
 
 [cache]
 # dir = "/home/me/.cache/npd"   # default $XDG_CACHE_HOME/npd

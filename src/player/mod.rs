@@ -379,6 +379,24 @@ impl Player {
         self.delete(pos..pos + 1)
     }
 
+    /// Replaces the queue (another device's, on handoff), paused at
+    /// `elapsed` seconds into `current`. Options are kept.
+    pub fn replace_queue(&self, songs: Vec<Arc<SongRow>>, current: Option<usize>, elapsed: f64) -> Result<()> {
+        let mut inner = self.lock();
+        inner.queue.clear();
+        inner.queue.add(songs, None);
+        inner.queue.set_current(current);
+        inner.state = if inner.queue.current().is_some() { State::Pause } else { State::Stop };
+        self.sync(&mut inner, true, Some(elapsed).filter(|&e| e > 0.0))?;
+        drop(inner);
+        self.emit(&[Subsystem::Playlist, Subsystem::Player]);
+        Ok(())
+    }
+
+    pub fn state(&self) -> State {
+        self.lock().state
+    }
+
     pub fn clear(&self) -> Result<()> {
         let mut inner = self.lock();
         inner.queue.clear();

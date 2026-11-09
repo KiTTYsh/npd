@@ -1,6 +1,7 @@
 mod art;
 mod config;
 mod events;
+mod handoff;
 mod library;
 mod mpd;
 mod player;
@@ -154,6 +155,14 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         warn!("restoring state: {e:#}");
     }
     state::spawn_saver(Arc::clone(&player), &events, state_path.clone());
+    let handoff = if config.playback.handoff {
+        let h = handoff::Handoff::new(Arc::clone(&client), Arc::clone(&player), Arc::clone(&library), &state_dir);
+        h.before_resume().await;
+        h.spawn_saver(&events);
+        Some(h)
+    } else {
+        None
+    };
 
     let playlists = Playlists::new(Arc::clone(&client), events.clone(), &config.playlists.favorites);
     playlists.start_polling(std::time::Duration::from_secs(config.playlists.poll_interval));
@@ -170,6 +179,7 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
         player: Arc::clone(&player),
         client,
         playlists,
+        handoff: handoff.clone(),
         stickers,
         art,
         channels: Default::default(),
@@ -185,5 +195,12 @@ async fn run(config: Config, client: Arc<subsonic::Client>) -> Result<()> {
     }
     info!("shutting down");
     state::save(&player, &state_path)?;
+    if let Some(h) = handoff {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), h.save()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("saving play queue: {e:#}"),
+            Err(_) => warn!("saving play queue: timed out"),
+        }
+    }
     Ok(())
 }

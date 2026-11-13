@@ -46,9 +46,11 @@ pub struct Queue {
     pub consume: bool,
     pub single: Single,
     random: bool,
-    /// Random play order of the context songs still to play, by ID;
-    /// `order[0]` is the current context song.
+    /// Random play order of the context songs, by ID: `order[..played]`
+    /// have played this cycle, the last of them being the current context
+    /// song, and the rest are still to play.
     order: Vec<ItemId>,
+    played: usize,
 }
 
 impl Queue {
@@ -89,6 +91,10 @@ impl Queue {
     }
 
     pub fn set_random(&mut self, on: bool) {
+        // Clients re-send their state; that mustn't lose the history.
+        if self.random == on {
+            return;
+        }
         self.random = on;
         self.reshuffle();
     }
@@ -138,6 +144,7 @@ impl Queue {
         rest.shuffle(&mut rand::rng());
         self.order.extend(anchor);
         self.order.extend(rest);
+        self.played = usize::from(anchor.is_some());
     }
 
     /// Adds context songs to the random order at random places among the
@@ -147,11 +154,46 @@ impl Queue {
         if !self.random {
             return;
         }
-        // order[0] is the current context song; new songs go after it.
-        let first = usize::from(!self.order.is_empty() && self.current.is_some());
+        let first = self.played.min(self.order.len());
         for id in ids {
             let at = rand::random_range(first..=self.order.len());
             self.order.insert(at, id);
+        }
+    }
+
+    /// Drops songs from the random order, played or not.
+    fn order_remove(&mut self, ids: &[ItemId]) {
+        self.played -= self.order[..self.played].iter().filter(|id| ids.contains(id)).count();
+        self.order.retain(|id| !ids.contains(id));
+    }
+
+    /// Plays `id` next in the random order, wherever it was.
+    fn order_push(&mut self, id: ItemId) {
+        self.order_remove(&[id]);
+        self.order.insert(self.played, id);
+        self.played += 1;
+    }
+
+    /// Moves the random order onto `id`, which now plays after `old` (the
+    /// context song playing before, if any).
+    fn order_play(&mut self, id: ItemId, old: Option<ItemId>) {
+        match self.order.iter().position(|&i| i == id) {
+            // Round again after the whole cycle played: a fresh order,
+            // keeping the song just played for `previous`.
+            Some(0) if self.played == self.order.len() && self.order.len() > 1 => {
+                let old = old.filter(|&o| o != id && self.order.contains(&o));
+                let mut rest: Vec<ItemId> =
+                    self.order.iter().copied().filter(|&i| i != id && Some(i) != old).collect();
+                rest.shuffle(&mut rand::rng());
+                self.order.clear();
+                self.order.extend(old);
+                self.order.push(id);
+                self.played = self.order.len();
+                self.order.extend(rest);
+            }
+            // Back to a song already played: the songs since come up again.
+            Some(i) if i < self.played => self.played = i + 1,
+            _ => self.order_push(id),
         }
     }
 
@@ -231,7 +273,7 @@ impl Queue {
             }
         }
         let marked: Vec<ItemId> = positions.iter().filter_map(|&p| self.items.get(p)).map(|i| i.id).collect();
-        self.order.retain(|id| !marked.contains(id));
+        self.order_remove(&marked);
         self.normalize();
     }
 
@@ -244,8 +286,7 @@ impl Queue {
             && self.random
             && let Some(id) = self.current_item().filter(|i| !i.up_next).map(|i| i.id)
         {
-            self.order.retain(|&i| i != id);
-            self.order.insert(0, id);
+            self.order_push(id);
         }
         removed_current
     }
@@ -258,7 +299,7 @@ impl Queue {
         }
         let n = range.len();
         let removed: Vec<ItemId> = self.items.drain(range.clone()).map(|i| i.id).collect();
-        self.order.retain(|id| !removed.contains(id));
+        self.order_remove(&removed);
         let mut removed_current = false;
         if let Some(cur) = self.current {
             if range.contains(&cur) {
@@ -279,6 +320,7 @@ impl Queue {
         self.current = None;
         self.bump(0..0);
         self.order.clear();
+        self.played = 0;
     }
 
     /// Moves the songs in `range` so the first lands at `to` (a position in
@@ -316,7 +358,7 @@ impl Queue {
         let joined: Vec<ItemId> = if joins { moved.iter().map(|i| i.id).collect() } else { Vec::new() };
         self.items.splice(to..to, moved);
         self.current = current_id.and_then(|id| self.position_of(id));
-        self.order.retain(|id| !joined.contains(id));
+        self.order_remove(&joined);
         let lo = range.start.min(to);
         let hi = range.end.max(to + range.len()).min(self.items.len());
         self.bump(lo..hi);
@@ -355,17 +397,8 @@ impl Queue {
         self.current = target.and_then(|id| self.position_of(id));
         if self.random {
             match self.current_item().filter(|i| !i.up_next).map(|i| i.id) {
-                Some(id) => {
-                    // The previous context song has played.
-                    if let Some(old) = old_anchor
-                        && old != id
-                        && self.order.first() == Some(&old)
-                    {
-                        self.order.remove(0);
-                    }
-                    self.order.retain(|&i| i != id);
-                    self.order.insert(0, id);
-                }
+                Some(id) if Some(id) != old_anchor => self.order_play(id, old_anchor),
+                Some(_) => {}
                 None if self.current.is_none() => self.reshuffle(),
                 None => {}
             }
@@ -388,10 +421,7 @@ impl Queue {
         let anchor = self.anchor(pos);
         let is_context = |p: &usize| !self.items[*p].up_next;
         if self.random {
-            let start = anchor
-                .and_then(|a| self.order.iter().position(|&id| id == self.items[a].id))
-                .map_or(0, |i| i + 1);
-            let next = self.order[start.min(self.order.len())..].iter().find_map(|&id| self.position_of(id));
+            let next = self.order[self.played.min(self.order.len())..].iter().find_map(|&id| self.position_of(id));
             return match next {
                 Some(p) => Some(p),
                 None if self.repeat => self.order.first().and_then(|&id| self.position_of(id)),
@@ -440,6 +470,7 @@ impl Queue {
             self.single = Single::Off;
         }
         let next_id = next.map(|p| self.items[p].id);
+        let old_anchor = self.anchor(cur).map(|a| self.items[a].id);
         let finished_context = !self.items[cur].up_next;
         if self.consume || !finished_context {
             self.remove_range(cur..cur + 1);
@@ -447,10 +478,9 @@ impl Queue {
         self.current = next_id.and_then(|id| self.position_of(id));
         if self.random
             && let Some(id) = self.current_item().filter(|i| !i.up_next).map(|i| i.id)
-            && let Some(idx) = self.order.iter().position(|&i| i == id)
+            && Some(id) != old_anchor
         {
-            // Drop the finished part of the order so `order[0]` is current.
-            self.order.drain(..idx);
+            self.order_play(id, old_anchor);
         }
         self.normalize();
         self.current
@@ -687,5 +717,108 @@ mod tests {
         }
         seen.sort();
         assert_eq!(seen, (0..20).collect::<Vec<_>>());
+    }
+
+    /// Advances, returning the song now playing.
+    fn step(q: &mut Queue) -> usize {
+        let p = q.advance().unwrap();
+        n(&q.items()[p])
+    }
+
+    /// Skips back once, as `previous` does.
+    fn back(q: &mut Queue) -> Option<usize> {
+        let prev = q.previous_before(q.current()?)?;
+        q.set_current(Some(prev));
+        Some(n(&q.items()[prev]))
+    }
+
+    #[test]
+    fn random_previous_retraces_the_order() {
+        let mut q = queue(10);
+        q.set_current(Some(0));
+        q.set_random(true);
+        let forward: Vec<usize> = (0..5).map(|_| step(&mut q)).collect();
+        let backward: Vec<usize> = (0..5).map(|_| back(&mut q).unwrap()).collect();
+        let mut want: Vec<usize> = [0].into_iter().chain(forward[..4].iter().copied()).collect();
+        want.reverse();
+        assert_eq!(backward, want, "back retraces the songs played");
+        assert_eq!(back(&mut q), None, "nothing before the first song");
+        let again: Vec<usize> = (0..5).map(|_| step(&mut q)).collect();
+        assert_eq!(again, forward, "forward plays them again in the same order");
+    }
+
+    #[test]
+    fn random_jumps_count_as_played() {
+        let mut q = queue(10);
+        q.set_current(Some(0));
+        q.set_random(true);
+        let upcoming = q.next().unwrap();
+        // Jump to a song that wasn't next; it doesn't come round again.
+        let jump = (1..10).find(|&p| p != upcoming).unwrap();
+        q.set_current(Some(jump));
+        assert_eq!(back(&mut q), Some(0));
+        q.set_current(Some(jump));
+        let mut played = vec![0, jump];
+        while let Some(p) = q.advance() {
+            played.push(p);
+        }
+        played.sort();
+        assert_eq!(played, (0..10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn random_repeat_reshuffles_and_previous_crosses_the_cycle() {
+        let mut q = queue(8);
+        q.set_current(Some(0));
+        q.set_random(true);
+        q.repeat = true;
+        let mut cycle = vec![0];
+        for _ in 0..7 {
+            cycle.push(q.advance().unwrap());
+        }
+        let last = *cycle.last().unwrap();
+        let first = q.advance().unwrap();
+        assert_eq!(first, cycle[0], "the cycle wraps to its first song");
+        assert_eq!(q.previous_before(first), Some(last), "previous reaches the last cycle");
+        // The new cycle plays everything but the song that just ended,
+        // which then starts the one after.
+        let mut next = vec![first];
+        for _ in 0..6 {
+            next.push(q.advance().unwrap());
+        }
+        assert_eq!(q.advance(), Some(last));
+        next.push(last);
+        next.sort();
+        assert_eq!(next, (0..8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn random_history_survives_moving_a_played_song_up_next() {
+        let mut q = queue(10);
+        q.set_current(Some(0));
+        q.set_random(true);
+        let a = step(&mut q);
+        q.advance();
+        let upcoming = n(&q.items()[q.next().unwrap()]);
+        // Queue song 0, already played, to play next.
+        let cur = q.current().unwrap();
+        q.move_range(0..1, cur).unwrap();
+        assert_eq!(up(&q), ["0.flac"]);
+        let cur = q.current().unwrap();
+        assert_eq!(n(&q.items()[q.previous_before(cur).unwrap()]), a, "history skips the moved song");
+        assert_eq!(step(&mut q), 0);
+        assert_eq!(step(&mut q), upcoming, "the shuffle carries on");
+    }
+
+    #[test]
+    fn setting_random_again_keeps_the_order() {
+        let mut q = queue(20);
+        q.set_current(Some(0));
+        q.set_random(true);
+        q.advance();
+        let order = q.order.clone();
+        q.set_random(true);
+        assert_eq!(q.order, order);
+        assert_eq!(q.played, 2);
     }
 }
